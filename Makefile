@@ -22,5 +22,12 @@ test-release:
 test-debug:
 	cargo nextest run --no-fail-fast
 
+test-release-all-features:
+	cargo nextest run --release --no-fail-fast --all-features
+
+test-debug-all-features:
+	cargo nextest run --no-fail-fast --all-features
+
+
 clean:
 	cargo clean

@@ -1,22 +1,33 @@
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "thiserror", derive(thiserror::Error))]
 pub enum SendErrorNoWait<T> {
+    #[cfg_attr(feature = "thiserror", error("Full"))]
     Full(T),
+    #[cfg_attr(feature = "thiserror", error("Closed"))]
     Closed(T),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "thiserror", derive(thiserror::Error))]
 pub enum SendError<T> {
+    #[cfg_attr(feature = "thiserror", error("Closed"))]
     Closed(T),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "thiserror", derive(thiserror::Error))]
 pub enum RecvErrorNoWait {
+    #[cfg_attr(feature = "thiserror", error("Empty"))]
     Empty,
+    #[cfg_attr(feature = "thiserror", error("Full"))]
     Closed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "thiserror", derive(thiserror::Error))]
 pub enum RecvError {
+    #[cfg_attr(feature = "thiserror", error("Full"))]
     Closed,
 }
 
