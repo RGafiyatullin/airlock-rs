@@ -1,4 +1,5 @@
 use core::borrow::Borrow;
+use core::convert::Infallible;
 use core::future;
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicU8, Ordering};
@@ -8,6 +9,7 @@ use futures::task::AtomicWaker;
 
 use crate::error::{RecvError, RecvErrorNoWait, SendError, SendErrorNoWait};
 use crate::slot::Slot;
+use crate::utils;
 
 const FLAG_IS_CLOSED: u8 = 0b0001;
 const FLAG_IS_FULL: u8 = 0b0010;
@@ -15,6 +17,7 @@ const FLAG_TX_IS_SET: u8 = 0b0100;
 const FLAG_RX_IS_SET: u8 = 0b1000;
 const ATOMIC_UPDATE_MAX_ITERATIONS: usize = 1024;
 
+/// A medium through which [`Rx`] and [`Tx`] communicate.
 pub struct Link<T> {
     flags: AtomicU8,
     rx_waker: AtomicWaker,
@@ -22,6 +25,7 @@ pub struct Link<T> {
     slot: Slot<T>,
 }
 
+/// The receiving side of the channel
 pub struct Rx<T, L>
 where
     L: Borrow<Link<T>>,
@@ -30,6 +34,7 @@ where
     _value: PhantomData<T>,
 }
 
+/// The sending side of the channel
 pub struct Tx<T, L>
 where
     L: Borrow<Link<T>>,
@@ -42,15 +47,18 @@ impl<T, L> Rx<T, L>
 where
     L: Borrow<Link<T>>,
 {
+    /// Creates a new [`Rx`].
     pub fn new(link: L) -> Self {
         link.borrow().set_rx();
         Self { link, _value: Default::default() }
     }
 
+    /// Receives a value if it is ready.
     pub fn recv_nowait(&mut self) -> Result<T, RecvErrorNoWait> {
         self.link.borrow().recv_nowait()
     }
 
+    /// Receives a value, waits if necessary.
     pub async fn recv(&mut self) -> Result<T, RecvError> {
         let link = self.link.borrow();
         future::poll_fn(|cx| link.poll_recv(cx)).await
@@ -61,15 +69,18 @@ impl<T, L> Tx<T, L>
 where
     L: Borrow<Link<T>>,
 {
+    /// Creates a new [`Tx`].
     pub fn new(link: L) -> Self {
         link.borrow().set_tx();
         Self { link, _value: Default::default() }
     }
 
+    /// Sends a value if the channel is not full.
     pub fn send_nowait(&mut self, value: T) -> Result<(), SendErrorNoWait<T>> {
         self.link.borrow().send_nowait(value)
     }
 
+    /// Sends a value, waits if necessary.
     pub async fn send(&mut self, value: T) -> Result<(), SendError<T>> {
         let mut value = Some(value);
         let link = self.link.borrow();
@@ -78,6 +89,7 @@ where
 }
 
 impl<T> Link<T> {
+    /// Creates a new ['Link`]
     pub fn new() -> Self {
         Default::default()
     }
@@ -118,31 +130,13 @@ impl<T> Link<T> {
             (_, false) => {
                 let value = unsafe { self.slot.as_maybe_uninit_mut().assume_init_read() };
 
-                let mut atomic_update_success = false;
-
-                let mut old_flags = flags;
-                for _ in 0..ATOMIC_UPDATE_MAX_ITERATIONS {
-                    let new_flags = old_flags & !FLAG_IS_FULL;
-                    match self.flags.compare_exchange(
-                        old_flags,
-                        new_flags,
-                        Ordering::SeqCst,
-                        Ordering::SeqCst,
-                    ) {
-                        Ok(_) => {
-                            atomic_update_success = true;
-                            break
-                        },
-                        Err(v) => {
-                            old_flags = v;
-                            continue
-                        },
-                    }
-                }
-
-                if !atomic_update_success {
-                    panic!("failed to perform atomic update")
-                }
+                utils::compare_exchange_loop(
+                    &self.flags,
+                    self.update_max_iterations(),
+                    Some(flags),
+                    |old_flags| Ok::<_, Infallible>(old_flags & !FLAG_IS_FULL),
+                )
+                .expect("failed to perform atomic update");
 
                 self.tx_waker.wake();
 
@@ -162,30 +156,14 @@ impl<T> Link<T> {
             (false, true) => Err(SendErrorNoWait::full(value)),
             (false, false) => {
                 unsafe { self.slot.as_maybe_uninit_mut() }.write(value);
-                let mut atomic_update_success = false;
-                let mut old_flags = flags;
-                for _ in 0..ATOMIC_UPDATE_MAX_ITERATIONS {
-                    let new_flags = old_flags | FLAG_IS_FULL;
-                    match self.flags.compare_exchange(
-                        old_flags,
-                        new_flags,
-                        Ordering::SeqCst,
-                        Ordering::SeqCst,
-                    ) {
-                        Ok(_) => {
-                            atomic_update_success = true;
-                            break
-                        },
-                        Err(v) => {
-                            old_flags = v;
-                            continue
-                        },
-                    }
-                }
 
-                if !atomic_update_success {
-                    panic!("failed to perform atomic update")
-                }
+                utils::compare_exchange_loop(
+                    &self.flags,
+                    self.update_max_iterations(),
+                    Some(flags),
+                    |old_flags| Ok::<_, Infallible>(old_flags | FLAG_IS_FULL),
+                )
+                .expect("failed to perform atomic update");
 
                 self.rx_waker.wake();
 
@@ -195,31 +173,13 @@ impl<T> Link<T> {
     }
 
     fn close(&self, notify_tx: bool, notify_rx: bool) {
-        let mut atomic_update_success = false;
-        let mut old_flags = self.flags.load(Ordering::SeqCst);
-        for _ in 0..ATOMIC_UPDATE_MAX_ITERATIONS {
-            let new_flags = old_flags | FLAG_IS_CLOSED;
-
-            match self.flags.compare_exchange(
-                old_flags,
-                new_flags,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                Ok(_) => {
-                    atomic_update_success = true;
-                    break
-                },
-                Err(v) => {
-                    old_flags = v;
-                    continue
-                },
-            }
-        }
-
-        if !atomic_update_success {
-            panic!("failed to perform atomic update")
-        }
+        utils::compare_exchange_loop(
+            &self.flags,
+            self.update_max_iterations(),
+            None,
+            |old_flags| Ok::<_, Infallible>(old_flags | FLAG_IS_CLOSED),
+        )
+        .expect("failed to perform atomic update");
 
         if notify_tx {
             self.tx_waker.wake();
@@ -230,70 +190,40 @@ impl<T> Link<T> {
     }
 
     fn set_tx(&self) {
-        let mut atomic_update_success = false;
-
-        let mut old_flags = self.flags.load(Ordering::SeqCst);
-
-        for _ in 0..ATOMIC_UPDATE_MAX_ITERATIONS {
-            if old_flags & FLAG_TX_IS_SET != 0 {
-                panic!("this link already has a Tx");
-            }
-
-            let new_flags = old_flags | FLAG_TX_IS_SET;
-
-            match self.flags.compare_exchange(
-                old_flags,
-                new_flags,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                Ok(_) => {
-                    atomic_update_success = true;
-                    break
-                },
-                Err(v) => {
-                    old_flags = v;
-                    continue
-                },
-            }
-        }
-
-        if !atomic_update_success {
-            panic!("failed to perform atomic update")
+        if let Err(err) = utils::compare_exchange_loop(
+            &self.flags,
+            self.update_max_iterations(),
+            None,
+            |old_flags| {
+                if old_flags & FLAG_TX_IS_SET != 0 {
+                    Err("this link already has a Tx")
+                } else {
+                    Ok(old_flags | FLAG_TX_IS_SET)
+                }
+            },
+        ) {
+            panic!("{}", err.unwrap_or("failed to perform atomic update"))
         }
     }
     fn set_rx(&self) {
-        let mut atomic_update_success = false;
-
-        let mut old_flags = self.flags.load(Ordering::SeqCst);
-
-        for _ in 0..ATOMIC_UPDATE_MAX_ITERATIONS {
-            if old_flags & FLAG_RX_IS_SET != 0 {
-                panic!("this link already has an Rx");
-            }
-
-            let new_flags = old_flags | FLAG_RX_IS_SET;
-
-            match self.flags.compare_exchange(
-                old_flags,
-                new_flags,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                Ok(_) => {
-                    atomic_update_success = true;
-                    break
-                },
-                Err(v) => {
-                    old_flags = v;
-                    continue
-                },
-            }
+        if let Err(err) = utils::compare_exchange_loop(
+            &self.flags,
+            self.update_max_iterations(),
+            None,
+            |old_flags| {
+                if old_flags & FLAG_RX_IS_SET != 0 {
+                    Err("this link already has a Rx")
+                } else {
+                    Ok(old_flags | FLAG_RX_IS_SET)
+                }
+            },
+        ) {
+            panic!("{}", err.unwrap_or("failed to perform atomic update"))
         }
+    }
 
-        if !atomic_update_success {
-            panic!("failed to perform atomic update")
-        }
+    fn update_max_iterations(&self) -> usize {
+        ATOMIC_UPDATE_MAX_ITERATIONS
     }
 }
 
