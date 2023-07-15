@@ -1,4 +1,3 @@
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "thiserror", derive(thiserror::Error))]
 pub enum SendErrorNoWait<T> {

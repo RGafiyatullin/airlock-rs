@@ -213,3 +213,19 @@ async fn t_07() {
 
     assert_eq!(counter.count(), 0);
 }
+
+#[tokio::test]
+#[should_panic]
+async fn t_08() {
+    let link = Link::<Value>::new();
+    let mut _rx_1 = Rx::new(&link);
+    let mut _rx_2 = Rx::new(&link);
+}
+
+#[tokio::test]
+#[should_panic]
+async fn t_09() {
+    let link = Link::<Value>::new();
+    let mut _tx_1 = Tx::new(&link);
+    let mut _tx_2 = Tx::new(&link);
+}

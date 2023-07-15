@@ -9,8 +9,10 @@ use futures::task::AtomicWaker;
 use crate::error::{RecvError, RecvErrorNoWait, SendError, SendErrorNoWait};
 use crate::slot::Slot;
 
-const FLAG_IS_CLOSED: u8 = 0b01;
-const FLAG_IS_FULL: u8 = 0b10;
+const FLAG_IS_CLOSED: u8 = 0b0001;
+const FLAG_IS_FULL: u8 = 0b0010;
+const FLAG_TX_IS_SET: u8 = 0b0100;
+const FLAG_RX_IS_SET: u8 = 0b1000;
 const ATOMIC_UPDATE_MAX_ITERATIONS: usize = 1024;
 
 pub struct Link<T> {
@@ -41,6 +43,7 @@ where
     L: Borrow<Link<T>>,
 {
     pub fn new(link: L) -> Self {
+        link.borrow().set_rx();
         Self { link, _value: Default::default() }
     }
 
@@ -59,6 +62,7 @@ where
     L: Borrow<Link<T>>,
 {
     pub fn new(link: L) -> Self {
+        link.borrow().set_tx();
         Self { link, _value: Default::default() }
     }
 
@@ -222,6 +226,73 @@ impl<T> Link<T> {
         }
         if notify_rx {
             self.rx_waker.wake();
+        }
+    }
+
+    fn set_tx(&self) {
+        let mut atomic_update_success = false;
+
+        let mut old_flags = self.flags.load(Ordering::SeqCst);
+
+        for _ in 0..ATOMIC_UPDATE_MAX_ITERATIONS {
+            if old_flags & FLAG_TX_IS_SET != 0 {
+                panic!("this link already has a Tx");
+            }
+
+            let new_flags = old_flags | FLAG_TX_IS_SET;
+
+            match self.flags.compare_exchange(
+                old_flags,
+                new_flags,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => {
+                    atomic_update_success = true;
+                    break
+                },
+                Err(v) => {
+                    old_flags = v;
+                    continue
+                },
+            }
+        }
+
+        if !atomic_update_success {
+            panic!("failed to perform atomic update")
+        }
+    }
+    fn set_rx(&self) {
+        let mut atomic_update_success = false;
+
+        let mut old_flags = self.flags.load(Ordering::SeqCst);
+
+        for _ in 0..ATOMIC_UPDATE_MAX_ITERATIONS {
+            if old_flags & FLAG_RX_IS_SET != 0 {
+                panic!("this link already has an Rx");
+            }
+
+            let new_flags = old_flags | FLAG_RX_IS_SET;
+
+            match self.flags.compare_exchange(
+                old_flags,
+                new_flags,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => {
+                    atomic_update_success = true;
+                    break
+                },
+                Err(v) => {
+                    old_flags = v;
+                    continue
+                },
+            }
+        }
+
+        if !atomic_update_success {
+            panic!("failed to perform atomic update")
         }
     }
 }
