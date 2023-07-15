@@ -8,8 +8,8 @@ use utils::{Counted, Counter};
 
 type Value = Counted<usize>;
 
-#[tokio::test]
-async fn t_01() {
+#[test]
+fn t_01() {
     let counter = Counter::new();
 
     {
@@ -34,8 +34,8 @@ async fn t_01() {
     assert_eq!(counter.count(), 0);
 }
 
-#[tokio::test]
-async fn t_02() {
+#[test]
+fn t_02() {
     let counter = Counter::new();
 
     {
@@ -49,8 +49,8 @@ async fn t_02() {
     assert_eq!(counter.count(), 0);
 }
 
-#[tokio::test]
-async fn t_03() {
+#[test]
+fn t_03() {
     let counter = Counter::new();
 
     {
@@ -71,8 +71,8 @@ async fn t_03() {
     assert_eq!(counter.count(), 0);
 }
 
-#[tokio::test]
-async fn t_04() {
+#[test]
+fn t_04() {
     let counter = Counter::new();
 
     {
@@ -88,8 +88,8 @@ async fn t_04() {
     assert_eq!(counter.count(), 0);
 }
 
-#[tokio::test]
-async fn t_05() {
+#[test]
+fn t_05() {
     let counter = Counter::new();
 
     {
@@ -214,18 +214,77 @@ async fn t_07() {
     assert_eq!(counter.count(), 0);
 }
 
-#[tokio::test]
+#[test]
 #[should_panic]
-async fn t_08() {
+fn t_08() {
     let link = Link::<Value>::new();
     let mut _rx_1 = Rx::new(&link);
     let mut _rx_2 = Rx::new(&link);
 }
 
-#[tokio::test]
+#[test]
 #[should_panic]
-async fn t_09() {
+fn t_09() {
     let link = Link::<Value>::new();
     let mut _tx_1 = Tx::new(&link);
     let mut _tx_2 = Tx::new(&link);
+}
+
+#[test]
+fn t_10() {
+    let counter = Counter::new();
+    {
+        let link = Link::<Value>::new();
+        let mut tx = Tx::new(&link);
+        let mut rx = Rx::new(&link);
+
+        tx.close();
+        assert!(rx.recv_nowait().expect_err("rx.recv_nowait").is_closed());
+    }
+    assert_eq!(counter.count(), 0);
+}
+
+#[test]
+fn t_11() {
+    let counter = Counter::new();
+    {
+        let link = Link::<Value>::new();
+        let mut tx = Tx::new(&link);
+        let mut rx = Rx::new(&link);
+
+        tx.send_nowait(counter.add(1)).expect("tx.send-nowait");
+        tx.close();
+        assert_eq!(rx.recv_nowait().expect("rx.recv-nowait").unwrap(), 1);
+        assert!(rx.recv_nowait().expect_err("rx.recv-nowait").is_closed());
+    }
+    assert_eq!(counter.count(), 0);
+}
+
+#[test]
+fn t_12() {
+    let counter = Counter::new();
+    {
+        let link = Link::<Value>::new();
+        let mut tx = Tx::new(&link);
+        let mut rx = Rx::new(&link);
+
+        rx.close();
+        assert!(tx.send_nowait(counter.add(1)).expect_err("tx.send-nowait").is_closed());
+    }
+    assert_eq!(counter.count(), 0);
+}
+
+#[test]
+fn t_13() {
+    let counter = Counter::new();
+    {
+        let link = Link::<Value>::new();
+        let mut tx = Tx::new(&link);
+        let mut rx = Rx::new(&link);
+
+        tx.send_nowait(counter.add(1)).expect("tx.send-nowait");
+        rx.close();
+        assert!(tx.send_nowait(counter.add(2)).expect_err("tx.send-nowait").is_closed());
+    }
+    assert_eq!(counter.count(), 0);
 }

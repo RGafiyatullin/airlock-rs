@@ -63,6 +63,10 @@ where
         let link = self.link.borrow();
         future::poll_fn(|cx| link.poll_recv(cx)).await
     }
+
+    pub fn close(&mut self) {
+        self.link.borrow().close(true, false)
+    }
 }
 
 impl<T, L> Tx<T, L>
@@ -85,6 +89,10 @@ where
         let mut value = Some(value);
         let link = self.link.borrow();
         future::poll_fn(|cx| link.poll_send(cx, &mut value)).await
+    }
+
+    pub fn close(&mut self) {
+        self.link.borrow().close(false, true)
     }
 }
 
