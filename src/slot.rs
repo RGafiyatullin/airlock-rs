@@ -24,6 +24,3 @@ impl<T> Slot<T> {
         unsafe { maybe_uninit_ptr.as_mut() }.expect("UnsafeCell returned null_ptr?")
     }
 }
-
-unsafe impl<T> Send for Slot<T> where T: Send {}
-unsafe impl<T> Sync for Slot<T> where T: Sync {}

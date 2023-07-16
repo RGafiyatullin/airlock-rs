@@ -15,6 +15,7 @@ pub mod slot;
 pub mod spsc;
 
 mod fmt;
+mod send_sync;
 mod utils;
 
 #[cfg(feature = "std")]
