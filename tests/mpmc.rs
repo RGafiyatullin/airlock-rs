@@ -79,6 +79,50 @@ fn t_04() {
     assert_eq!(counter.count(), 0);
 }
 
+#[test]
+fn t_05() {
+    let counter = Counter::new();
+
+    {
+        let tx_wakers = make_wakers::<1>();
+        let rx_wakers = make_wakers::<1>();
+        let buffer = make_buffer::<2>();
+        let link = Link::<Value, _, _, _>::new(&buffer, &tx_wakers, &rx_wakers);
+
+        let mut tx_1 = Tx::new(&link);
+        let mut rx_1 = Rx::new(&link);
+
+        tx_1.send_nowait(counter.add(1)).expect("tx-1.send-nowait");
+        assert_eq!(rx_1.recv_nowait().expect("rx-1.recv-nowait").unwrap(), 1);
+        assert!(rx_1.recv_nowait().expect_err("rx-1.recv-nowait").is_empty());
+    }
+    assert_eq!(counter.count(), 0);
+}
+
+#[tokio::test]
+async fn t_06() {
+    let counter = Counter::new();
+
+    {
+        let tx_wakers = make_wakers::<2>();
+        let rx_wakers = make_wakers::<2>();
+        let buffer = make_buffer::<3>();
+        let link = Link::<Value, _, _, _>::new(&buffer, &tx_wakers, &rx_wakers);
+
+        let  mut tx_1 = Tx::new(&link);
+        let mut tx_2 = Tx::new(&link);
+
+        let mut rx_1 = Rx::new(&link);
+        let mut rx_2 = Rx::new(&link);
+
+        tx_1.send(counter.add(1)).await.expect("tx-1.send");
+        tx_2.send(counter.add(2)).await.expect("tx-2.send");
+        assert_eq!(rx_1.recv().await.expect("rx-1.recv").unwrap(), 1);
+        assert_eq!(rx_2.recv().await.expect("rx-2.recv").unwrap(), 2);
+    }
+    assert_eq!(counter.count(), 0);
+}
+
 fn make_buffer<const SIZE: usize>() -> [Slot<Value>; SIZE] {
     core::array::from_fn(|_| Default::default())
 }

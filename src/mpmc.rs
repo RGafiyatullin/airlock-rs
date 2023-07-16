@@ -1,11 +1,14 @@
 use core::borrow::Borrow;
 use core::convert::Infallible;
+use core::future;
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::task::{Context, Poll};
 
 use futures::task::AtomicWaker;
 
-use crate::error::{RecvErrorNoWait, SendErrorNoWait};
+use crate::error::{RecvErrorNoWait, SendErrorNoWait, RecvError, SendError};
+use crate::mpmc::bits::head_taken;
 use crate::slot::Slot;
 use crate::utils::{self, AtomicUpdate};
 
@@ -96,6 +99,13 @@ where
     pub fn send_nowait(&mut self, value: T) -> Result<(), SendErrorNoWait<T>> {
         self.link.borrow().send_nowait(value)
     }
+
+    /// Sends a value, waits if necessary.
+    pub async fn send(&mut self, value: T) -> Result<(), SendError<T>> {
+        let mut value = Some(value);
+        let link = self.link.borrow();
+        future::poll_fn(|cx| link.poll_send(cx, self.idx, &mut value)).await
+    }
 }
 
 impl<T, L, B, TW, RW> Rx<T, L, B, TW, RW>
@@ -117,6 +127,17 @@ where
             link,
             idx,
         }
+    }
+
+    /// Receives a value if it is ready.
+    pub fn recv_nowait(&mut self) -> Result<T, RecvErrorNoWait> {
+        self.link.borrow().recv_nowait()
+    }
+
+    /// Receives a value, waits if necessary.
+    pub async fn recv(&mut self) -> Result<T, RecvError> {
+        let link = self.link.borrow();
+        future::poll_fn(|cx| link.poll_recv(cx, self.idx)).await
     }
 }
 
@@ -145,11 +166,32 @@ where
     TW: AsRef<[(AtomicBool, AtomicWaker)]>,
     RW: AsRef<[(AtomicBool, AtomicWaker)]>,
 {
+    fn poll_recv(&self, cx: &mut Context, idx: usize) -> Poll<Result<T, RecvError>> {
+        self.rx_wakers.as_ref()[idx].1.register(cx.waker());
+        match self.recv_nowait() {
+            Ok(value) => Poll::Ready(Ok(value)),
+            Err(RecvErrorNoWait::Closed) => Poll::Ready(Err(RecvError::closed())),
+            Err(RecvErrorNoWait::Empty) => Poll::Pending,
+        }
+    }
+
+    fn poll_send(&self, cx: &mut Context, idx: usize, value: &mut Option<T>) -> Poll<Result<(), SendError<T>>> {
+        self.tx_wakers.as_ref()[idx].1.register(cx.waker());
+        match self.send_nowait(value.take().expect("stolen value")) {
+            Ok(()) => Poll::Ready(Ok(())),
+            Err(SendErrorNoWait::Closed(rejected)) => Poll::Ready(Err(SendError::closed(rejected))),
+            Err(SendErrorNoWait::Full(rejected)) => {
+                *value = Some(rejected);
+                Poll::Pending
+            },
+        }
+    }
+
     fn send_nowait(&self, value: T) -> Result<(), SendErrorNoWait<T>> {
         let buffer = self.buffer.as_ref();
         let buffer_len = buffer.len();
 
-        let (tail_taken, tail_taken_next) = {
+        let (tail_this, tail_next) = {
             let mut output = None;
 
             match utils::compare_exchange_loop(
@@ -166,8 +208,8 @@ where
                     let is_closed = bits::is_closed(bits);
 
                     match (is_closed, is_full) {
-                        (true, _) => Err(SendErrorNoWait::Closed(())),
-                        (false, true) => Err(SendErrorNoWait::Full(())),
+                        (true, _) => Err(SendErrorNoWait::closed(())),
+                        (false, true) => Err(SendErrorNoWait::full(())),
                         (false, false) => {
                             output = Some((tail_taken, tail_taken_next));
                             let new_bits = bits::set_tail_taken(bits, tail_taken_next);
@@ -182,11 +224,11 @@ where
             }
         };
 
-        unsafe { buffer[tail_taken].as_maybe_uninit_mut() }.write(value);
+        unsafe { buffer[tail_this].as_maybe_uninit_mut() }.write(value);
 
         utils::compare_exchange_loop(&self.bits, self.update_max_iterations(), None, |old_bits| {
-            if bits::tail_avail(old_bits) == tail_taken {
-                let new_bits = bits::set_tail_avail(old_bits, tail_taken_next);
+            if bits::tail_avail(old_bits) == tail_this {
+                let new_bits = bits::set_tail_avail(old_bits, tail_next);
                 Ok::<_, Infallible>(AtomicUpdate::Set(new_bits))
             } else {
                 Ok::<_, Infallible>(AtomicUpdate::Retry)
@@ -201,8 +243,58 @@ where
         Ok(())
     }
 
-    fn recv_nowait(&self) -> Result<(), RecvErrorNoWait> {
-        unimplemented!()
+    fn recv_nowait(&self) -> Result<T, RecvErrorNoWait> {
+        let buffer = self.buffer.as_ref();
+        let buffer_len = buffer.len();
+
+        let (head_this, head_next) = {
+            let mut output = None;
+
+            match utils::compare_exchange_loop(
+                &self.bits,
+                self.update_max_iterations(),
+                None,
+                |bits| {
+                    let head_taken = bits::head_taken(bits);
+                    let tail_avail = bits::tail_avail(bits);
+                    let head_taken_next = (head_taken + 1) % buffer_len;
+                    let is_empty = tail_avail == head_taken;
+                    let is_closed = bits::is_closed(bits);
+
+                    match (is_empty, is_closed) {
+                        (true, true) => Err(RecvErrorNoWait::closed()),
+                        (true, false) => Err(RecvErrorNoWait::empty()),
+                        (false, _) => {
+                            output = Some((head_taken, head_taken_next));
+                            let new_bits = bits::set_head_taken(bits, head_taken_next);
+                            Ok(AtomicUpdate::Set(new_bits))
+                        },
+                    }
+                },
+            ) {
+                Ok(_) => output.unwrap(),
+                Err(None) => panic!("Failed to perform atomic update"),
+                Err(Some(e)) => return Err(e),
+            }
+        };
+
+        let value = unsafe { buffer[head_this].as_maybe_uninit_mut().assume_init_read() };
+
+        utils::compare_exchange_loop(&self.bits, self.update_max_iterations(), None, |old_bits| {
+            if bits::head_avail(old_bits) == head_this {
+                let new_bits = bits::set_head_avail(old_bits, head_next);
+                Ok::<_, Infallible>(AtomicUpdate::Set(new_bits))
+            } else {
+                Ok::<_, Infallible>(AtomicUpdate::Retry)
+            }
+        })
+        .expect("Failed to perform atomic update");
+
+        for (_, waker) in self.tx_wakers.as_ref() {
+            waker.wake();
+        }
+
+        Ok(value)
     }
 
     fn attach_tx(&self) -> usize {
