@@ -15,7 +15,7 @@ where
     RW: AsRef<[(AtomicBool, AtomicWaker)]>,
 {
     _value: PhantomData<T>,
-    
+
     buffer: B,
 
     refs: AtomicUsize,
@@ -142,14 +142,29 @@ where
     fn attach_rx(&self) -> usize {
         self.attach(self.rx_wakers.as_ref())
     }
+    fn detach_tx(&self, idx: usize) {
+        self.detach(self.tx_wakers.as_ref(), idx)
+    }
+    fn detach_rx(&self, idx: usize) {
+        self.detach(self.rx_wakers.as_ref(), idx)
+    }
 
     fn attach(&self, wakers: &[(AtomicBool, AtomicWaker)]) -> usize {
         for (idx, (taken, _waker)) in wakers.iter().enumerate() {
             if !taken.swap(true, Ordering::SeqCst) {
+                self.ref_inc();
                 return idx
             }
         }
         panic!("all wakers are taken")
+    }
+
+    fn detach(&self, wakers: &[(AtomicBool, AtomicWaker)], idx: usize) {
+        let (taken, _) = &wakers[idx];
+        if !taken.swap(false, Ordering::SeqCst) {
+            panic!("attempt to detach from unoccupied waker")
+        }
+        self.ref_dec();
     }
 
     fn ref_inc(&self) {
@@ -174,7 +189,9 @@ where
     TW: AsRef<[(AtomicBool, AtomicWaker)]>,
     RW: AsRef<[(AtomicBool, AtomicWaker)]>,
 {
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        self.link.borrow().detach_tx(self.idx);
+    }
 }
 
 impl<T, L, B, TW, RW> Drop for Rx<T, L, B, TW, RW>
@@ -184,7 +201,9 @@ where
     TW: AsRef<[(AtomicBool, AtomicWaker)]>,
     RW: AsRef<[(AtomicBool, AtomicWaker)]>,
 {
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        self.link.borrow().detach_rx(self.idx);
+    }
 }
 
 impl<T, B, TW, RW> Drop for Link<T, B, TW, RW>
