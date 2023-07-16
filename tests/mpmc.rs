@@ -109,7 +109,7 @@ async fn t_06() {
         let buffer = make_buffer::<3>();
         let link = Link::<Value, _, _, _>::new(&buffer, &tx_wakers, &rx_wakers);
 
-        let  mut tx_1 = Tx::new(&link);
+        let mut tx_1 = Tx::new(&link);
         let mut tx_2 = Tx::new(&link);
 
         let mut rx_1 = Rx::new(&link);
@@ -119,6 +119,50 @@ async fn t_06() {
         tx_2.send(counter.add(2)).await.expect("tx-2.send");
         assert_eq!(rx_1.recv().await.expect("rx-1.recv").unwrap(), 1);
         assert_eq!(rx_2.recv().await.expect("rx-2.recv").unwrap(), 2);
+    }
+    assert_eq!(counter.count(), 0);
+}
+
+#[tokio::test]
+async fn t_07() {
+    let counter = Counter::new();
+
+    const ITERATIONS: usize = 100_000;
+
+    {
+        let tx_wakers = make_wakers::<WAKERS_COUNT>();
+        let rx_wakers = make_wakers::<WAKERS_COUNT>();
+        let buffer = make_buffer::<BUFFER_SIZE>();
+        let link = Link::<Value, _, _, _>::new(&buffer, &tx_wakers, &rx_wakers);
+
+        let producers = (0..WAKERS_COUNT).map(|_| async {
+            let t0 = std::time::Instant::now();
+
+            let mut tx = Tx::new(&link);
+            for i in 0..ITERATIONS {
+                tx.send(counter.add(i)).await.expect("tx.send");
+            }
+
+            t0.elapsed()
+        });
+        let consumers = (0..WAKERS_COUNT).map(|_| async {
+            let t0 = std::time::Instant::now();
+            
+            let mut rx = Rx::new(&link);
+            for i in 0..ITERATIONS {
+                rx.recv().await.expect("rx.recv");
+            }
+
+            t0.elapsed()
+        });
+
+        let producers = future::join_all(producers);
+        let consumers = future::join_all(consumers);
+
+        let (producers_dts, consumers_dts) = future::join(producers, consumers).await;
+
+        eprintln!("producers: {:#?}", producers_dts);
+        eprintln!("consumers: {:#?}", consumers_dts);
     }
     assert_eq!(counter.count(), 0);
 }

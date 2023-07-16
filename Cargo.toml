@@ -19,4 +19,5 @@ futures = {version = "^0.3", default-features = false}
 thiserror = {version = "^1", optional = true}
 
 [dev-dependencies]
+futures = {version = "^0.3", default-features = false, features = ["std"]}
 tokio = {version = "^1", features = ["macros", "rt", "time"]}

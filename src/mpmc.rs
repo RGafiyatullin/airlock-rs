@@ -7,7 +7,7 @@ use core::task::{Context, Poll};
 
 use futures::task::AtomicWaker;
 
-use crate::error::{RecvErrorNoWait, SendErrorNoWait, RecvError, SendError};
+use crate::error::{RecvError, RecvErrorNoWait, SendError, SendErrorNoWait};
 use crate::mpmc::bits::head_taken;
 use crate::slot::Slot;
 use crate::utils::{self, AtomicUpdate};
@@ -175,7 +175,12 @@ where
         }
     }
 
-    fn poll_send(&self, cx: &mut Context, idx: usize, value: &mut Option<T>) -> Poll<Result<(), SendError<T>>> {
+    fn poll_send(
+        &self,
+        cx: &mut Context,
+        idx: usize,
+        value: &mut Option<T>,
+    ) -> Poll<Result<(), SendError<T>>> {
         self.tx_wakers.as_ref()[idx].1.register(cx.waker());
         match self.send_nowait(value.take().expect("stolen value")) {
             Ok(()) => Poll::Ready(Ok(())),
