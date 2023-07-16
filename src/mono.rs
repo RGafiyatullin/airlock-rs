@@ -15,7 +15,6 @@ const FLAG_IS_CLOSED: u8 = 0b0001;
 const FLAG_IS_FULL: u8 = 0b0010;
 const FLAG_TX_IS_SET: u8 = 0b0100;
 const FLAG_RX_IS_SET: u8 = 0b1000;
-const ATOMIC_UPDATE_MAX_ITERATIONS: usize = 1024;
 
 /// A medium through which [`Rx`] and [`Tx`] communicate.
 pub struct Link<T> {
@@ -64,6 +63,7 @@ where
         future::poll_fn(|cx| link.poll_recv(cx)).await
     }
 
+    /// Closes the channel.
     pub fn close(&mut self) {
         self.link.borrow().close(true, false)
     }
@@ -91,6 +91,7 @@ where
         future::poll_fn(|cx| link.poll_send(cx, &mut value)).await
     }
 
+    /// Closes the channel.
     pub fn close(&mut self) {
         self.link.borrow().close(false, true)
     }
@@ -231,7 +232,7 @@ impl<T> Link<T> {
     }
 
     fn update_max_iterations(&self) -> usize {
-        ATOMIC_UPDATE_MAX_ITERATIONS
+        utils::ATOMIC_UPDATE_MAX_ITERATIONS
     }
 }
 
@@ -248,7 +249,15 @@ impl<T> Default for Link<T> {
 
 impl<T> Drop for Link<T> {
     fn drop(&mut self) {
-        if self.flags.load(Ordering::SeqCst) & FLAG_IS_FULL != 0 {
+        let flags = self.flags.load(Ordering::SeqCst);
+        let is_closed = flags & FLAG_IS_CLOSED != 0;
+        let tx_is_set = flags & FLAG_TX_IS_SET != 0;
+        let rx_is_set = flags & FLAG_RX_IS_SET != 0;
+
+        if !is_closed && (tx_is_set || rx_is_set) {
+            panic!("Dropping unclosed Link")
+        }
+        if flags & FLAG_IS_FULL != 0 {
             unsafe {
                 self.slot.as_maybe_uninit_mut().assume_init_drop();
             }

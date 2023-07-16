@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use core::borrow::{Borrow, BorrowMut};
 use std::sync::Arc;
 

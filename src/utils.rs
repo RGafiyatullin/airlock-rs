@@ -1,4 +1,6 @@
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+
+pub(crate) const ATOMIC_UPDATE_MAX_ITERATIONS: usize = 1024;
 
 pub trait AtomicValue {
     type Value: Copy;
@@ -64,3 +66,4 @@ macro_rules! impl_atomic_value {
 }
 
 impl_atomic_value!(AtomicU8, u8);
+impl_atomic_value!(AtomicUsize, usize);

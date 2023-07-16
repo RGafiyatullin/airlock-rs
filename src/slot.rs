@@ -2,6 +2,7 @@ use core::cell::UnsafeCell;
 use core::fmt;
 use core::mem::MaybeUninit;
 
+/// A wrapper around the unsafe-cell carrying a value
 pub struct Slot<T>(UnsafeCell<MaybeUninit<T>>);
 
 impl<T> Default for Slot<T> {
