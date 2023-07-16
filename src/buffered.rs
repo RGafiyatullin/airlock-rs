@@ -5,11 +5,12 @@ use core::marker::PhantomData;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::task::{Context, Poll};
 
-use futures::task::AtomicWaker;
+use crate::atomic_waker::AtomicWaker;
 
 use crate::error::{RecvError, RecvErrorNoWait, SendError, SendErrorNoWait};
 use crate::slot::Slot;
 use crate::utils;
+use crate::utils::AtomicUpdate;
 
 /// A medium through which [`Rx`] and [`Tx`] communicate.
 pub struct Link<T, B>
@@ -25,8 +26,8 @@ where
     ///
     /// 1bit — unused
     ///
-    /// for 32bit usize max capacity — 32_768-1
-    /// for 64bit usize max capacity — 2_147_483_648-1
+    /// for 32bit usize max capacity — 16_384-1
+    /// for 64bit usize max capacity — 1_073_741_824-1
     bits: AtomicUsize,
 
     tx_waker: AtomicWaker,
@@ -178,9 +179,11 @@ where
                 let value = unsafe { buffer[head].as_maybe_uninit_mut().assume_init_read() };
                 utils::compare_exchange_loop(
                     &self.bits,
-                    self.update_max_iterations(),
+                    self.max_iterations_for_atomic_update(),
                     Some(bits),
-                    |old_bits| Ok::<_, Infallible>(bits::head::set(old_bits, head_next)),
+                    |old_bits| {
+                        Ok::<_, Infallible>(AtomicUpdate::Set(bits::head::set(old_bits, head_next)))
+                    },
                 )
                 .expect("failed to perform atomic update");
                 self.tx_waker.wake();
@@ -209,9 +212,11 @@ where
                 unsafe { buffer[tail].as_maybe_uninit_mut() }.write(value);
                 utils::compare_exchange_loop(
                     &self.bits,
-                    self.update_max_iterations(),
+                    self.max_iterations_for_atomic_update(),
                     Some(bits),
-                    |old_bits| Ok::<_, Infallible>(bits::tail::set(old_bits, tail_next)),
+                    |old_bits| {
+                        Ok::<_, Infallible>(AtomicUpdate::Set(bits::tail::set(old_bits, tail_next)))
+                    },
                 )
                 .expect("failed to perform atomic update");
 
@@ -222,9 +227,12 @@ where
     }
 
     fn close(&self, notify_tx: bool, notify_rx: bool) {
-        utils::compare_exchange_loop(&self.bits, self.update_max_iterations(), None, |old_flags| {
-            Ok::<_, Infallible>(bits::is_closed::set(old_flags))
-        })
+        utils::compare_exchange_loop(
+            &self.bits,
+            self.max_iterations_for_atomic_update(),
+            None,
+            |old_flags| Ok::<_, Infallible>(AtomicUpdate::Set(bits::is_closed::set(old_flags))),
+        )
         .expect("failed to perform atomic update");
 
         if notify_tx {
@@ -238,13 +246,13 @@ where
     fn set_tx(&self) {
         if let Err(err) = utils::compare_exchange_loop(
             &self.bits,
-            self.update_max_iterations(),
+            self.max_iterations_for_atomic_update(),
             None,
             |old_bits| {
                 if bits::tx_is_set::is_set(old_bits) {
                     Err("this link already has a Tx")
                 } else {
-                    Ok(bits::tx_is_set::set(old_bits))
+                    Ok(AtomicUpdate::Set(bits::tx_is_set::set(old_bits)))
                 }
             },
         ) {
@@ -254,13 +262,13 @@ where
     fn set_rx(&self) {
         if let Err(err) = utils::compare_exchange_loop(
             &self.bits,
-            self.update_max_iterations(),
+            self.max_iterations_for_atomic_update(),
             None,
             |old_bits| {
                 if bits::rx_is_set::is_set(old_bits) {
                     Err("this link already has an Rx")
                 } else {
-                    Ok(bits::rx_is_set::set(old_bits))
+                    Ok(AtomicUpdate::Set(bits::rx_is_set::set(old_bits)))
                 }
             },
         ) {
@@ -268,7 +276,7 @@ where
         }
     }
 
-    fn update_max_iterations(&self) -> usize {
+    fn max_iterations_for_atomic_update(&self) -> usize {
         utils::ATOMIC_UPDATE_MAX_ITERATIONS
     }
 }
@@ -325,15 +333,20 @@ where
 
 mod bits {
     use core::sync::atomic::AtomicUsize;
+
+    use crate::utils;
+
     type Usize = <AtomicUsize as crate::utils::AtomicValue>::Value;
 
-    const USIZE_BITS: u32 = Usize::BITS;
+    const USIZE_BITS: u8 = Usize::BITS as u8;
 
-    const FLAG_IS_CLOSED: Usize = 0b001;
-    const FLAG_TX_IS_SET: Usize = 0b010;
-    const FLAG_RX_IS_SET: Usize = 0b100;
-    const FLAGS_COUNT: u32 = 3;
-    const INDEX_BIT_COUNT: u32 = (USIZE_BITS - FLAGS_COUNT) / 2;
+    const POS_IS_CLOSED: u8 = 0;
+    const POS_TX_IS_SET: u8 = 1;
+    const POS_RX_IS_SET: u8 = 2;
+
+    const FLAGS_COUNT: u8 = 3;
+
+    const INDEX_BIT_COUNT: u8 = (USIZE_BITS - FLAGS_COUNT) / 2;
 
     const ONES: Usize = Usize::MAX;
     const MASK_INDEX: Usize = !(ONES << INDEX_BIT_COUNT);
@@ -345,65 +358,61 @@ mod bits {
     pub(super) mod is_closed {
         use super::*;
 
-        const FLAG: Usize = FLAG_IS_CLOSED;
-
         pub fn is_set(bits: Usize) -> bool {
-            bits & FLAG != 0
+            utils::bits::flag::<Usize, POS_IS_CLOSED>(bits) != 0
         }
 
         pub fn set(bits: Usize) -> Usize {
-            bits | FLAG
+            bits | utils::bits::flag::<Usize, POS_IS_CLOSED>(utils::bits::ones::<Usize>())
         }
     }
     pub(super) mod tx_is_set {
         use super::*;
 
-        const FLAG: Usize = FLAG_TX_IS_SET;
-
         pub fn is_set(bits: Usize) -> bool {
-            bits & FLAG != 0
+            utils::bits::flag::<Usize, POS_TX_IS_SET>(bits) != 0
         }
 
         pub fn set(bits: Usize) -> Usize {
-            bits | FLAG
+            bits | utils::bits::flag::<Usize, POS_TX_IS_SET>(utils::bits::ones::<Usize>())
         }
     }
     pub(super) mod rx_is_set {
         use super::*;
 
-        const FLAG: Usize = FLAG_RX_IS_SET;
-
         pub fn is_set(bits: Usize) -> bool {
-            bits & FLAG != 0
+            utils::bits::flag::<Usize, POS_RX_IS_SET>(bits) != 0
         }
 
         pub fn set(bits: Usize) -> Usize {
-            bits | FLAG
+            bits | utils::bits::flag::<Usize, POS_RX_IS_SET>(utils::bits::ones::<Usize>())
         }
     }
 
     pub(super) mod head {
         use super::*;
 
-        const POSITION: u32 = FLAGS_COUNT;
+        const START: u8 = FLAGS_COUNT;
+        const LEN: u8 = INDEX_BIT_COUNT;
 
         pub fn get(bits: Usize) -> Usize {
-            (bits >> POSITION) & MASK_INDEX
+            utils::bits::unpack::<Usize, START, LEN>(bits)
         }
         pub fn set(bits: Usize, index: Usize) -> Usize {
-            bits & !(MASK_INDEX << POSITION) ^ ((index & MASK_INDEX) << POSITION)
+            utils::bits::pack::<Usize, START, LEN>(bits, index)
         }
     }
     pub(super) mod tail {
         use super::*;
 
-        const POSITION: u32 = FLAGS_COUNT + INDEX_BIT_COUNT;
+        const START: u8 = FLAGS_COUNT + INDEX_BIT_COUNT;
+        const LEN: u8 = INDEX_BIT_COUNT;
 
         pub fn get(bits: Usize) -> Usize {
-            (bits >> POSITION) & MASK_INDEX
+            utils::bits::unpack::<Usize, START, LEN>(bits)
         }
         pub fn set(bits: Usize, index: Usize) -> Usize {
-            bits & !(MASK_INDEX << POSITION) ^ ((index & MASK_INDEX) << POSITION)
+            utils::bits::pack::<Usize, START, LEN>(bits, index)
         }
     }
 

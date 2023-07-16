@@ -109,3 +109,12 @@ impl RecvError {
         matches!(self, Self::Closed { .. })
     }
 }
+
+impl<T> SendErrorNoWait<T> {
+    pub(crate) fn map_value<V>(self, value: V) -> SendErrorNoWait<V> {
+        match self {
+            Self::Closed { .. } => SendErrorNoWait::Closed(value),
+            Self::Full { .. } => SendErrorNoWait::Full(value),
+        }
+    }
+}
