@@ -1,4 +1,4 @@
-name: "Rust: cargo test"
+name: "Rust: cargo test (no_std)"
 
 on:
   push:
