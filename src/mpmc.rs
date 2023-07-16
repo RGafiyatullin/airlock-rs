@@ -1,9 +1,11 @@
 use core::borrow::Borrow;
+use core::convert::Infallible;
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use futures::task::AtomicWaker;
 
+use crate::error::{RecvErrorNoWait, SendErrorNoWait};
 use crate::slot::Slot;
 use crate::utils;
 
@@ -19,14 +21,16 @@ where
     buffer: B,
 
     refs: AtomicUsize,
-    /// four indexes:
-    /// - head-taken
-    /// - head-available
-    /// - tail-taken
-    /// - tail-available
+
+    /// 1bit closed flag [0]
+    /// four indexes (15/7bit):
+    /// - head-taken     [ 1..=15 / 1..=7  ]
+    /// - head-available [16..=30 / 8..=14 ]
+    /// - tail-taken     [31..=45 / 15..=21]
+    /// - tail-available [46..=61 / 22..=29]
     ///
-    /// for 64bit usize max capacity — 65536-1
-    /// for 32bit usize max capacity - 256-1
+    /// for 64bit usize max capacity — 32768-1
+    /// for 32bit usize max capacity - 128-1
     bits: AtomicUsize,
 
     tx_wakers: TW,
@@ -136,6 +140,35 @@ where
     TW: AsRef<[(AtomicBool, AtomicWaker)]>,
     RW: AsRef<[(AtomicBool, AtomicWaker)]>,
 {
+    fn send_nowait(&self, value: T) -> Result<(), SendErrorNoWait<T>> {
+        let buffer = self.buffer.as_ref();
+        let buffer_len = buffer.len();
+
+        let bits = self.bits.load(Ordering::SeqCst);
+
+        let head_avail = bits::head_avail(bits);
+        let tail_taken = bits::tail_taken(bits);
+        let tail_if_full = (head_avail + buffer_len - 1) % buffer_len;
+        let tail_avail_when_can_commit = (tail_taken + buffer_len - 1) % buffer_len;
+
+        let is_full = tail_taken == tail_if_full;
+        let is_closed = bits::is_closed(bits);
+
+        match (is_closed, is_full) {
+            (true, _) => Err(SendErrorNoWait::Closed(value)),
+            (false, true) => Err(SendErrorNoWait::Full(value)),
+            (false, false) => {
+                unsafe { buffer[tail_taken].as_maybe_uninit_mut() }.write(value);
+
+                unimplemented!()
+            },
+        }
+    }
+
+    fn recv_nowait(&self) -> Result<(), RecvErrorNoWait> {
+        unimplemented!()
+    }
+
     fn attach_tx(&self) -> usize {
         self.attach(self.tx_wakers.as_ref())
     }
@@ -220,4 +253,55 @@ where
     }
 }
 
-mod bits {}
+mod bits {
+    use core::sync::atomic::AtomicUsize;
+
+    use crate::utils;
+
+    const POS_IS_CLOSED: u8 = 0;
+    const FLAGS_COUNT: u8 = 1;
+
+    type Usize = <AtomicUsize as crate::utils::AtomicValue>::Value;
+    const USIZE_BITS: u8 = Usize::BITS as u8;
+
+    const INDEX_BIT_COUNT: u8 = (USIZE_BITS - FLAGS_COUNT) / 4;
+    const START_HEAD_TAKEN: u8 = FLAGS_COUNT;
+    const START_HEAD_AVAIL: u8 = FLAGS_COUNT + INDEX_BIT_COUNT * 1;
+    const START_TAIL_TAKEN: u8 = FLAGS_COUNT + INDEX_BIT_COUNT * 2;
+    const START_TAIL_AVAIL: u8 = FLAGS_COUNT + INDEX_BIT_COUNT * 3;
+
+    pub(super) fn is_closed(bits: Usize) -> bool {
+        utils::bits::flag::<Usize, POS_IS_CLOSED>(bits) != 0
+    }
+    pub(super) fn set_closed(bits: Usize) -> Usize {
+        utils::bits::flag::<Usize, POS_IS_CLOSED>(utils::bits::ones())
+    }
+
+    pub(super) fn head_taken(bits: Usize) -> Usize {
+        utils::bits::unpack::<Usize, START_HEAD_TAKEN, INDEX_BIT_COUNT>(bits)
+    }
+    pub(super) fn set_head_taken(bits: Usize, value: Usize) -> Usize {
+        utils::bits::pack::<Usize, START_HEAD_TAKEN, INDEX_BIT_COUNT>(bits, value)
+    }
+
+    pub(super) fn head_avail(bits: Usize) -> Usize {
+        utils::bits::unpack::<Usize, START_HEAD_AVAIL, INDEX_BIT_COUNT>(bits)
+    }
+    pub(super) fn set_head_avail(bits: Usize, value: Usize) -> Usize {
+        utils::bits::pack::<Usize, START_HEAD_AVAIL, INDEX_BIT_COUNT>(bits, value)
+    }
+
+    pub(super) fn tail_taken(bits: Usize) -> Usize {
+        utils::bits::unpack::<Usize, START_TAIL_TAKEN, INDEX_BIT_COUNT>(bits)
+    }
+    pub(super) fn set_tail_taken(bits: Usize, value: Usize) -> Usize {
+        utils::bits::pack::<Usize, START_TAIL_TAKEN, INDEX_BIT_COUNT>(bits, value)
+    }
+
+    pub(super) fn tail_avail(bits: Usize) -> Usize {
+        utils::bits::unpack::<Usize, START_TAIL_AVAIL, INDEX_BIT_COUNT>(bits)
+    }
+    pub(super) fn set_tail_avail(bits: Usize, value: Usize) -> Usize {
+        utils::bits::pack::<Usize, START_TAIL_AVAIL, INDEX_BIT_COUNT>(bits, value)
+    }
+}

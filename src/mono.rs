@@ -10,6 +10,7 @@ use crate::atomic_waker::AtomicWaker;
 use crate::error::{RecvError, RecvErrorNoWait, SendError, SendErrorNoWait};
 use crate::slot::Slot;
 use crate::utils;
+use crate::utils::Update;
 
 const FLAG_IS_CLOSED: u8 = 0b0001;
 const FLAG_IS_FULL: u8 = 0b0010;
@@ -143,7 +144,7 @@ impl<T> Link<T> {
                     &self.flags,
                     self.update_max_iterations(),
                     Some(flags),
-                    |old_flags| Ok::<_, Infallible>(old_flags & !FLAG_IS_FULL),
+                    |old_flags| Ok::<_, Infallible>(Update::Set(old_flags & !FLAG_IS_FULL)),
                 )
                 .expect("failed to perform atomic update");
 
@@ -170,7 +171,7 @@ impl<T> Link<T> {
                     &self.flags,
                     self.update_max_iterations(),
                     Some(flags),
-                    |old_flags| Ok::<_, Infallible>(old_flags | FLAG_IS_FULL),
+                    |old_flags| Ok::<_, Infallible>(Update::Set(old_flags | FLAG_IS_FULL)),
                 )
                 .expect("failed to perform atomic update");
 
@@ -186,7 +187,7 @@ impl<T> Link<T> {
             &self.flags,
             self.update_max_iterations(),
             None,
-            |old_flags| Ok::<_, Infallible>(old_flags | FLAG_IS_CLOSED),
+            |old_flags| Ok::<_, Infallible>(Update::Set(old_flags | FLAG_IS_CLOSED)),
         )
         .expect("failed to perform atomic update");
 
@@ -207,7 +208,7 @@ impl<T> Link<T> {
                 if old_flags & FLAG_TX_IS_SET != 0 {
                     Err("this link already has a Tx")
                 } else {
-                    Ok(old_flags | FLAG_TX_IS_SET)
+                    Ok(Update::Set(old_flags | FLAG_TX_IS_SET))
                 }
             },
         ) {
@@ -223,7 +224,7 @@ impl<T> Link<T> {
                 if old_flags & FLAG_RX_IS_SET != 0 {
                     Err("this link already has a Rx")
                 } else {
-                    Ok(old_flags | FLAG_RX_IS_SET)
+                    Ok(Update::Set(old_flags | FLAG_RX_IS_SET))
                 }
             },
         ) {

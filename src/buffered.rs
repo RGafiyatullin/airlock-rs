@@ -10,6 +10,7 @@ use crate::atomic_waker::AtomicWaker;
 use crate::error::{RecvError, RecvErrorNoWait, SendError, SendErrorNoWait};
 use crate::slot::Slot;
 use crate::utils;
+use crate::utils::Update;
 
 /// A medium through which [`Rx`] and [`Tx`] communicate.
 pub struct Link<T, B>
@@ -180,7 +181,9 @@ where
                     &self.bits,
                     self.update_max_iterations(),
                     Some(bits),
-                    |old_bits| Ok::<_, Infallible>(bits::head::set(old_bits, head_next)),
+                    |old_bits| {
+                        Ok::<_, Infallible>(Update::Set(bits::head::set(old_bits, head_next)))
+                    },
                 )
                 .expect("failed to perform atomic update");
                 self.tx_waker.wake();
@@ -211,7 +214,9 @@ where
                     &self.bits,
                     self.update_max_iterations(),
                     Some(bits),
-                    |old_bits| Ok::<_, Infallible>(bits::tail::set(old_bits, tail_next)),
+                    |old_bits| {
+                        Ok::<_, Infallible>(Update::Set(bits::tail::set(old_bits, tail_next)))
+                    },
                 )
                 .expect("failed to perform atomic update");
 
@@ -223,7 +228,7 @@ where
 
     fn close(&self, notify_tx: bool, notify_rx: bool) {
         utils::compare_exchange_loop(&self.bits, self.update_max_iterations(), None, |old_flags| {
-            Ok::<_, Infallible>(bits::is_closed::set(old_flags))
+            Ok::<_, Infallible>(Update::Set(bits::is_closed::set(old_flags)))
         })
         .expect("failed to perform atomic update");
 
@@ -244,7 +249,7 @@ where
                 if bits::tx_is_set::is_set(old_bits) {
                     Err("this link already has a Tx")
                 } else {
-                    Ok(bits::tx_is_set::set(old_bits))
+                    Ok(Update::Set(bits::tx_is_set::set(old_bits)))
                 }
             },
         ) {
@@ -260,7 +265,7 @@ where
                 if bits::rx_is_set::is_set(old_bits) {
                     Err("this link already has an Rx")
                 } else {
-                    Ok(bits::rx_is_set::set(old_bits))
+                    Ok(Update::Set(bits::rx_is_set::set(old_bits)))
                 }
             },
         ) {

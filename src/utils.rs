@@ -15,6 +15,11 @@ pub trait AtomicValue {
     ) -> Result<Self::Value, Self::Value>;
 }
 
+pub(crate) enum Update<T> {
+    Retry,
+    Set(T),
+}
+
 pub(crate) fn compare_exchange_loop<A, F, E>(
     atomic_value: &A,
     max_attempts: usize,
@@ -23,11 +28,12 @@ pub(crate) fn compare_exchange_loop<A, F, E>(
 ) -> Result<A::Value, Option<E>>
 where
     A: AtomicValue,
-    F: FnMut(A::Value) -> Result<A::Value, E>,
+    F: FnMut(A::Value) -> Result<Update<A::Value>, E>,
 {
     let mut old_value = old_value.unwrap_or_else(|| atomic_value.load(Ordering::SeqCst));
     for _ in 0..max_attempts {
-        let new_value = map_value(old_value).map_err(Some)?;
+        let Update::Set(new_value) = map_value(old_value).map_err(Some)? else { continue };
+
         match atomic_value.compare_exchange(
             old_value,
             new_value,
