@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use airlock::buffered::*;
+use airlock::spsc::buffered::*;
 use airlock::slot::Slot;
 
 mod utils;

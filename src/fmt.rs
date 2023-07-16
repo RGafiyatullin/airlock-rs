@@ -6,31 +6,31 @@ use futures::task::AtomicWaker;
 
 use crate::slot::Slot;
 
-impl<T> fmt::Debug for crate::mono::Link<T> {
+impl<T> fmt::Debug for crate::spsc::direct::Link<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(core::any::type_name::<Self>()).finish()
     }
 }
 
-impl<T, L> fmt::Debug for crate::mono::Tx<T, L>
+impl<T, L> fmt::Debug for crate::spsc::direct::Tx<T, L>
 where
-    L: Borrow<crate::mono::Link<T>>,
+    L: Borrow<crate::spsc::direct::Link<T>>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(core::any::type_name::<Self>()).finish()
     }
 }
 
-impl<T, L> fmt::Debug for crate::mono::Rx<T, L>
+impl<T, L> fmt::Debug for crate::spsc::direct::Rx<T, L>
 where
-    L: Borrow<crate::mono::Link<T>>,
+    L: Borrow<crate::spsc::direct::Link<T>>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(core::any::type_name::<Self>()).finish()
     }
 }
 
-impl<T, B> fmt::Debug for crate::buffered::Link<T, B>
+impl<T, B> fmt::Debug for crate::spsc::buffered::Link<T, B>
 where
     B: AsRef<[Slot<T>]>,
 {
@@ -39,20 +39,20 @@ where
     }
 }
 
-impl<T, L, B> fmt::Debug for crate::buffered::Tx<T, L, B>
+impl<T, L, B> fmt::Debug for crate::spsc::buffered::Tx<T, L, B>
 where
     B: AsRef<[Slot<T>]>,
-    L: Borrow<crate::buffered::Link<T, B>>,
+    L: Borrow<crate::spsc::buffered::Link<T, B>>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(core::any::type_name::<Self>()).finish()
     }
 }
 
-impl<T, L, B> fmt::Debug for crate::buffered::Rx<T, L, B>
+impl<T, L, B> fmt::Debug for crate::spsc::buffered::Rx<T, L, B>
 where
     B: AsRef<[Slot<T>]>,
-    L: Borrow<crate::buffered::Link<T, B>>,
+    L: Borrow<crate::spsc::buffered::Link<T, B>>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct(core::any::type_name::<Self>()).finish()

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use airlock::mono::*;
+use airlock::spsc::direct::*;
 
 mod utils;
 use futures::future;

@@ -5,16 +5,14 @@
 
 /// Atomic Waker
 pub mod atomic_waker;
-/// Single producer single consumer buffered channel.
-pub mod buffered;
 /// Errors.
 pub mod error;
-/// Single producer single consumer non-buffered channel.
-pub mod mono;
 /// Multiple producers multiple consumers buffered channel.
 pub mod mpmc;
 /// Wrapper around unsafe-cell carrying a value.
 pub mod slot;
+/// Single producer single consumer channels
+pub mod spsc;
 
 mod fmt;
 mod utils;
