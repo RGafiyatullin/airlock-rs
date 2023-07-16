@@ -68,15 +68,50 @@ macro_rules! impl_atomic_value {
 impl_atomic_value!(AtomicU8, u8);
 impl_atomic_value!(AtomicUsize, usize);
 
-
 pub mod bits {
-    use core::ops::{BitAnd, BitOr, BitXor, Shl, Shr};
-    pub(crate) trait BitOps: From<u8> + Copy + Sized + BitAnd + BitOr + BitXor + Shl + Shr {}
-    impl<T> BitOps for T where T: From<u8> + Copy + Sized + BitAnd + BitOr + BitXor + Shl + Shr {}
+    use core::ops::{BitAnd, BitOr, BitXor, Not, Shl, Shr};
+    pub(crate) trait BitOps:
+        From<u8>
+        + Copy
+        + Sized
+        + Not<Output = Self>
+        + BitAnd<Output = Self>
+        + BitOr<Output = Self>
+        + BitXor<Output = Self>
+        + Shl<u8, Output = Self>
+        + Shr<u8, Output = Self>
+    {
+    }
+    impl<T> BitOps for T where
+        T: From<u8>
+            + Copy
+            + Sized
+            + Not<Output = Self>
+            + BitAnd<Output = Self>
+            + BitOr<Output = Self>
+            + BitXor<Output = Self>
+            + Shl<u8, Output = Self>
+            + Shr<u8, Output = Self>
+    {
+    }
 
-    pub(crate) fn flag<F: BitOps, const POS: usize>(flags: F) -> F {
-        
-        unimplemented!()
+    pub(crate) fn flag<F: BitOps, const POS: u8>(flags: F) -> F {
+        let one: F = 0b1u8.into();
+        let mask = one << POS;
+        flags & mask
+    }
+
+    pub(crate) fn unpack<F: BitOps, const START: u8, const LEN: u8>(packed: F) -> F {
+        let ones: F = !F::from(0b0u8);
+        let mask = (!(ones << LEN)) << START;
+        let bits = packed & mask;
+        bits >> START
+    }
+
+    pub(crate) fn pack<F: BitOps, const START: u8, const LEN: u8>(packed: F, value: F) -> F {
+        let ones: F = !F::from(0b0u8);
+        let mask = (!(ones << LEN)) << START;
+        let bits = (value << START) & mask;
+        (packed & !mask) | bits
     }
 }
-
