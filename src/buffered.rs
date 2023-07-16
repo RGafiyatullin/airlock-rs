@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::task::{Context, Poll};
 
-use futures::task::AtomicWaker;
+use crate::atomic_waker::AtomicWaker;
 
 use crate::error::{RecvError, RecvErrorNoWait, SendError, SendErrorNoWait};
 use crate::slot::Slot;

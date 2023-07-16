@@ -67,3 +67,16 @@ macro_rules! impl_atomic_value {
 
 impl_atomic_value!(AtomicU8, u8);
 impl_atomic_value!(AtomicUsize, usize);
+
+
+pub mod bits {
+    use core::ops::{BitAnd, BitOr, BitXor, Shl, Shr};
+    pub(crate) trait BitOps: From<u8> + Copy + Sized + BitAnd + BitOr + BitXor + Shl + Shr {}
+    impl<T> BitOps for T where T: From<u8> + Copy + Sized + BitAnd + BitOr + BitXor + Shl + Shr {}
+
+    pub(crate) fn flag<F: BitOps, const POS: usize>(flags: F) -> F {
+        
+        unimplemented!()
+    }
+}
+
