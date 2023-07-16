@@ -7,7 +7,7 @@ use core::task::{Context, Poll};
 
 use futures::task::AtomicWaker;
 
-use crate::error::{RecvError, RecvErrorNoWait, SendError, SendErrorNoWait};
+use crate::error::{LimitReached, RecvError, RecvErrorNoWait, SendError, SendErrorNoWait};
 use crate::slot::Slot;
 use crate::utils::{self, AtomicUpdate};
 
@@ -84,7 +84,7 @@ where
 {
     /// Creates a new [`Tx`]
     pub fn new(link: L) -> Self {
-        let idx = link.borrow().attach_tx();
+        let idx = link.borrow().try_attach_tx().expect("all tx-wakers are taken");
 
         Self {
             _value: Default::default(),
@@ -94,6 +94,25 @@ where
             link,
             idx,
         }
+    }
+
+    /// Try cloning this [`Tx`].
+    ///
+    /// Fails when all wakers are taken.
+    pub fn try_clone(&self) -> Result<Self, LimitReached>
+    where
+        L: Clone,
+    {
+        let idx = self.link.borrow().try_attach_tx().map_err(|()| LimitReached)?;
+
+        Ok(Self {
+            _value: Default::default(),
+            _buffer: Default::default(),
+            _tx_wakers: Default::default(),
+            _rx_waker: Default::default(),
+            link: self.link.clone(),
+            idx,
+        })
     }
 
     /// Sends a value if the channel is not full.
@@ -123,7 +142,7 @@ where
 {
     /// Creates a new [`Rx`]
     pub fn new(link: L) -> Self {
-        let idx = link.borrow().attach_rx();
+        let idx = link.borrow().try_attach_rx().expect("all rx-wakers are taken");
 
         Self {
             _value: Default::default(),
@@ -133,6 +152,25 @@ where
             link,
             idx,
         }
+    }
+
+    /// Try cloning this [`Rx`].
+    ///
+    /// Fails when all wakers are taken.
+    pub fn try_clone(&self) -> Result<Self, LimitReached>
+    where
+        L: Clone,
+    {
+        let idx = self.link.borrow().try_attach_rx().map_err(|()| LimitReached)?;
+
+        Ok(Self {
+            _value: Default::default(),
+            _buffer: Default::default(),
+            _tx_wakers: Default::default(),
+            _rx_waker: Default::default(),
+            link: self.link.clone(),
+            idx,
+        })
     }
 
     /// Receives a value if it is ready.
@@ -319,11 +357,11 @@ where
         Ok(value)
     }
 
-    fn attach_tx(&self) -> usize {
-        self.attach(self.tx_wakers.as_ref())
+    fn try_attach_tx(&self) -> Result<usize, ()> {
+        self.try_attach(self.tx_wakers.as_ref())
     }
-    fn attach_rx(&self) -> usize {
-        self.attach(self.rx_wakers.as_ref())
+    fn try_attach_rx(&self) -> Result<usize, ()> {
+        self.try_attach(self.rx_wakers.as_ref())
     }
     fn detach_tx(&self, idx: usize) {
         self.detach(self.tx_wakers.as_ref(), idx)
@@ -332,14 +370,14 @@ where
         self.detach(self.rx_wakers.as_ref(), idx)
     }
 
-    fn attach(&self, wakers: &[(AtomicBool, AtomicWaker)]) -> usize {
+    fn try_attach(&self, wakers: &[(AtomicBool, AtomicWaker)]) -> Result<usize, ()> {
         for (idx, (taken, _waker)) in wakers.iter().enumerate() {
             if !taken.swap(true, Ordering::SeqCst) {
                 self.ref_inc();
-                return idx
+                return Ok(idx)
             }
         }
-        panic!("all wakers are taken")
+        Err(())
     }
 
     fn detach(&self, wakers: &[(AtomicBool, AtomicWaker)], idx: usize) {

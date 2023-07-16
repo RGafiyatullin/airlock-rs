@@ -1,3 +1,9 @@
+/// Limit reached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "thiserror", derive(thiserror::Error))]
+#[cfg_attr(feature = "thiserror", error("Limit reached"))]
+pub struct LimitReached;
+
 /// Error performing non-blocking send.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "thiserror", derive(thiserror::Error))]
