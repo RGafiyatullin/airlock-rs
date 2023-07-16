@@ -7,7 +7,7 @@ use futures::task::AtomicWaker;
 
 use crate::error::{RecvErrorNoWait, SendErrorNoWait};
 use crate::slot::Slot;
-use crate::utils;
+use crate::utils::{self, AtomicUpdate};
 
 /// A medium through which [`Rx`] and [`Tx`] communicate.
 pub struct Link<T, B, TW, RW>
@@ -147,7 +147,7 @@ where
         let bits = self.bits.load(Ordering::SeqCst);
 
         let head_avail = bits::head_avail(bits);
-        let tail_taken = bits::tail_taken(bits);
+        let tail_taken = bits::tail_taken(bits); // FIXME: compare-exchange-loop to acquire this value
         let tail_if_full = (head_avail + buffer_len - 1) % buffer_len;
         let tail_avail_when_can_commit = (tail_taken + buffer_len - 1) % buffer_len;
 
@@ -159,8 +159,21 @@ where
             (false, true) => Err(SendErrorNoWait::Full(value)),
             (false, false) => {
                 unsafe { buffer[tail_taken].as_maybe_uninit_mut() }.write(value);
+                utils::compare_exchange_loop(
+                    &self.bits,
+                    self.update_max_iterations(),
+                    None,
+                    |old_bits| {
+                        if bits::tail_avail(old_bits) == tail_avail_when_can_commit {
+                            Ok::<_, Infallible>(AtomicUpdate::Set(tail_taken))
+                        } else {
+                            Ok::<_, Infallible>(AtomicUpdate::Retry)
+                        }
+                    },
+                )
+                .expect("Failed to perform atomic update");
 
-                unimplemented!()
+                Ok(())
             },
         }
     }
