@@ -25,8 +25,8 @@ where
     ///
     /// 1bit — unused
     ///
-    /// for 32bit usize max capacity — 32_768-1
-    /// for 64bit usize max capacity — 2_147_483_648-1
+    /// for 32bit usize max capacity — 16_384-1
+    /// for 64bit usize max capacity — 1_073_741_824-1
     bits: AtomicUsize,
 
     tx_waker: AtomicWaker,
@@ -325,15 +325,20 @@ where
 
 mod bits {
     use core::sync::atomic::AtomicUsize;
+
+    use crate::utils;
+
     type Usize = <AtomicUsize as crate::utils::AtomicValue>::Value;
 
-    const USIZE_BITS: u32 = Usize::BITS;
+    const USIZE_BITS: u8 = Usize::BITS as u8;
 
-    const FLAG_IS_CLOSED: Usize = 0b001;
-    const FLAG_TX_IS_SET: Usize = 0b010;
-    const FLAG_RX_IS_SET: Usize = 0b100;
-    const FLAGS_COUNT: u32 = 3;
-    const INDEX_BIT_COUNT: u32 = (USIZE_BITS - FLAGS_COUNT) / 2;
+    const POS_IS_CLOSED: u8 = 0;
+    const POS_TX_IS_SET: u8 = 1;
+    const POS_RX_IS_SET: u8 = 2;
+
+    const FLAGS_COUNT: u8 = 3;
+
+    const INDEX_BIT_COUNT: u8 = (USIZE_BITS - FLAGS_COUNT) / 2;
 
     const ONES: Usize = Usize::MAX;
     const MASK_INDEX: Usize = !(ONES << INDEX_BIT_COUNT);
@@ -345,65 +350,61 @@ mod bits {
     pub(super) mod is_closed {
         use super::*;
 
-        const FLAG: Usize = FLAG_IS_CLOSED;
-
         pub fn is_set(bits: Usize) -> bool {
-            bits & FLAG != 0
+            utils::bits::flag::<Usize, POS_IS_CLOSED>(bits) != 0
         }
 
         pub fn set(bits: Usize) -> Usize {
-            bits | FLAG
+            bits | utils::bits::flag::<Usize, POS_IS_CLOSED>(utils::bits::ones::<Usize>())
         }
     }
     pub(super) mod tx_is_set {
         use super::*;
 
-        const FLAG: Usize = FLAG_TX_IS_SET;
-
         pub fn is_set(bits: Usize) -> bool {
-            bits & FLAG != 0
+            utils::bits::flag::<Usize, POS_TX_IS_SET>(bits) != 0
         }
 
         pub fn set(bits: Usize) -> Usize {
-            bits | FLAG
+            bits | utils::bits::flag::<Usize, POS_TX_IS_SET>(utils::bits::ones::<Usize>())
         }
     }
     pub(super) mod rx_is_set {
         use super::*;
 
-        const FLAG: Usize = FLAG_RX_IS_SET;
-
         pub fn is_set(bits: Usize) -> bool {
-            bits & FLAG != 0
+            utils::bits::flag::<Usize, POS_RX_IS_SET>(bits) != 0
         }
 
         pub fn set(bits: Usize) -> Usize {
-            bits | FLAG
+            bits | utils::bits::flag::<Usize, POS_RX_IS_SET>(utils::bits::ones::<Usize>())
         }
     }
 
     pub(super) mod head {
         use super::*;
 
-        const POSITION: u32 = FLAGS_COUNT;
+        const START: u8 = FLAGS_COUNT;
+        const LEN: u8 = INDEX_BIT_COUNT;
 
         pub fn get(bits: Usize) -> Usize {
-            (bits >> POSITION) & MASK_INDEX
+            utils::bits::unpack::<Usize, START, LEN>(bits)
         }
         pub fn set(bits: Usize, index: Usize) -> Usize {
-            bits & !(MASK_INDEX << POSITION) ^ ((index & MASK_INDEX) << POSITION)
+            utils::bits::pack::<Usize, START, LEN>(bits, index)
         }
     }
     pub(super) mod tail {
         use super::*;
 
-        const POSITION: u32 = FLAGS_COUNT + INDEX_BIT_COUNT;
+        const START: u8 = FLAGS_COUNT + INDEX_BIT_COUNT;
+        const LEN: u8 = INDEX_BIT_COUNT;
 
         pub fn get(bits: Usize) -> Usize {
-            (bits >> POSITION) & MASK_INDEX
+            utils::bits::unpack::<Usize, START, LEN>(bits)
         }
         pub fn set(bits: Usize, index: Usize) -> Usize {
-            bits & !(MASK_INDEX << POSITION) ^ ((index & MASK_INDEX) << POSITION)
+            utils::bits::pack::<Usize, START, LEN>(bits, index)
         }
     }
 

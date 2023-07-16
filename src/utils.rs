@@ -95,6 +95,14 @@ pub mod bits {
     {
     }
 
+    pub(crate) fn zeroes<F: BitOps>() -> F {
+        0b0u8.into()
+    }
+    pub(crate) fn ones<F: BitOps>() -> F {
+        let zeroes: F = 0b0u8.into();
+        !zeroes
+    }
+
     pub(crate) fn flag<F: BitOps, const POS: u8>(flags: F) -> F {
         let one: F = 0b1u8.into();
         let mask = one << POS;
@@ -102,16 +110,39 @@ pub mod bits {
     }
 
     pub(crate) fn unpack<F: BitOps, const START: u8, const LEN: u8>(packed: F) -> F {
-        let ones: F = !F::from(0b0u8);
-        let mask = (!(ones << LEN)) << START;
-        let bits = packed & mask;
-        bits >> START
+        let ones: F = ones::<F>();
+        let mask = !(ones << LEN);
+        (packed >> START) & mask
     }
 
     pub(crate) fn pack<F: BitOps, const START: u8, const LEN: u8>(packed: F, value: F) -> F {
-        let ones: F = !F::from(0b0u8);
-        let mask = (!(ones << LEN)) << START;
+        let ones: F = ones::<F>();
+        let mask = !(ones << LEN) << START;
         let bits = (value << START) & mask;
         (packed & !mask) | bits
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn tests() {
+            assert_eq!(ones::<u8>(), 0b1111_1111);
+            assert_eq!(flag::<u8, 0>(ones()), 0b0000_0001);
+            assert_eq!(flag::<u8, 4>(ones()), 0b0001_0000);
+            assert_eq!(flag::<u8, 7>(ones()), 0b1000_0000);
+
+            assert_eq!(zeroes::<u8>(), 0b0000_0000);
+            assert_eq!(flag::<u8, 0>(zeroes()), 0b0000_0000);
+            assert_eq!(flag::<u8, 4>(zeroes()), 0b0000_0000);
+            assert_eq!(flag::<u8, 7>(zeroes()), 0b0000_0000);
+
+            assert_eq!(unpack::<u8, 1, 2>(ones()), 0b11);
+            assert_eq!(pack::<u8, 1, 2>(0b0000_0000, 0b11), 0b0000_0110);
+            assert_eq!(pack::<u8, 1, 2>(0b1111_1111, 0b11), 0b1111_1111);
+            assert_eq!(pack::<u8, 1, 2>(0b0000_0000, 0b00), 0b0000_0000);
+            assert_eq!(pack::<u8, 1, 2>(0b1111_1111, 0b00), 0b1111_1001);
+        }
     }
 }
