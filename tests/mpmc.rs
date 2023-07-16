@@ -11,8 +11,8 @@ use utils::{Counted, Counter};
 
 type Value = Counted<usize>;
 
-const BUFFER_SIZE: usize = 32;
-const WAKERS_COUNT: usize = 32;
+const BUFFER_SIZE: usize = 64;
+const WAKERS_COUNT: usize = 8;
 
 #[test]
 fn t_00() {
@@ -127,7 +127,7 @@ async fn t_06() {
 async fn t_07() {
     let counter = Counter::new();
 
-    const ITERATIONS: usize = 100_000;
+    const ITERATIONS: usize = 125_000;
 
     {
         let tx_wakers = make_wakers::<WAKERS_COUNT>();
@@ -147,9 +147,9 @@ async fn t_07() {
         });
         let consumers = (0..WAKERS_COUNT).map(|_| async {
             let t0 = std::time::Instant::now();
-            
+
             let mut rx = Rx::new(&link);
-            for i in 0..ITERATIONS {
+            for _i in 0..ITERATIONS {
                 rx.recv().await.expect("rx.recv");
             }
 
@@ -158,6 +158,61 @@ async fn t_07() {
 
         let producers = future::join_all(producers);
         let consumers = future::join_all(consumers);
+
+        let (producers_dts, consumers_dts) = future::join(producers, consumers).await;
+
+        eprintln!("producers: {:#?}", producers_dts);
+        eprintln!("consumers: {:#?}", consumers_dts);
+    }
+    assert_eq!(counter.count(), 0);
+}
+
+#[tokio::test]
+async fn t_08() {
+    let counter = Counter::new();
+
+    const ITERATIONS: usize = 125_000;
+
+    {
+        let tx_wakers = make_wakers::<WAKERS_COUNT>();
+        let rx_wakers = make_wakers::<WAKERS_COUNT>();
+        let buffer = make_buffer::<BUFFER_SIZE>();
+        let link = Arc::new(Link::<Value, _, _, _>::new(buffer, tx_wakers, rx_wakers));
+
+        let producers = (0..WAKERS_COUNT)
+            .map(|_| {
+                let counter = counter.clone();
+                let link = Arc::clone(&link);
+                async move {
+                    let t0 = std::time::Instant::now();
+
+                    let mut tx = Tx::new(Arc::clone(&link));
+                    for i in 0..ITERATIONS {
+                        tx.send(counter.add(i)).await.expect("tx.send");
+                    }
+
+                    t0.elapsed()
+                }
+            })
+            .map(tokio::spawn);
+        let consumers = (0..WAKERS_COUNT)
+            .map(|_| {
+                let link = Arc::clone(&link);
+                async move {
+                    let t0 = std::time::Instant::now();
+
+                    let mut rx = Rx::new(Arc::clone(&link));
+                    for i in 0..ITERATIONS {
+                        rx.recv().await.expect("rx.recv");
+                    }
+
+                    t0.elapsed()
+                }
+            })
+            .map(tokio::spawn);
+
+        let producers = future::try_join_all(producers);
+        let consumers = future::try_join_all(consumers);
 
         let (producers_dts, consumers_dts) = future::join(producers, consumers).await;
 
