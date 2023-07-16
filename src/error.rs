@@ -62,14 +62,6 @@ impl<T> SendErrorNoWait<T> {
     pub fn is_closed(&self) -> bool {
         matches!(self, Self::Closed { .. })
     }
-
-    /// Creates the same variant of such error, but with different Value.
-    pub fn map_value<V>(self, value: V) -> SendErrorNoWait<V> {
-        match self {
-            Self::Closed { .. } => SendErrorNoWait::Closed(value),
-            Self::Full { .. } => SendErrorNoWait::Full(value),
-        }
-    }
 }
 
 impl RecvErrorNoWait {
@@ -122,5 +114,14 @@ impl RecvError {
     /// Check whether is [`RecvError::Closed`]
     pub fn is_closed(&self) -> bool {
         matches!(self, Self::Closed { .. })
+    }
+}
+
+impl<T> SendErrorNoWait<T> {
+    pub(crate) fn map_value<V>(self, value: V) -> SendErrorNoWait<V> {
+        match self {
+            Self::Closed { .. } => SendErrorNoWait::Closed(value),
+            Self::Full { .. } => SendErrorNoWait::Full(value),
+        }
     }
 }
