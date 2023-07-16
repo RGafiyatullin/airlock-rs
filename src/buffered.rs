@@ -179,7 +179,7 @@ where
                 let value = unsafe { buffer[head].as_maybe_uninit_mut().assume_init_read() };
                 utils::compare_exchange_loop(
                     &self.bits,
-                    self.update_max_iterations(),
+                    self.max_iterations_for_atomic_update(),
                     Some(bits),
                     |old_bits| {
                         Ok::<_, Infallible>(AtomicUpdate::Set(bits::head::set(old_bits, head_next)))
@@ -212,7 +212,7 @@ where
                 unsafe { buffer[tail].as_maybe_uninit_mut() }.write(value);
                 utils::compare_exchange_loop(
                     &self.bits,
-                    self.update_max_iterations(),
+                    self.max_iterations_for_atomic_update(),
                     Some(bits),
                     |old_bits| {
                         Ok::<_, Infallible>(AtomicUpdate::Set(bits::tail::set(old_bits, tail_next)))
@@ -227,9 +227,12 @@ where
     }
 
     fn close(&self, notify_tx: bool, notify_rx: bool) {
-        utils::compare_exchange_loop(&self.bits, self.update_max_iterations(), None, |old_flags| {
-            Ok::<_, Infallible>(AtomicUpdate::Set(bits::is_closed::set(old_flags)))
-        })
+        utils::compare_exchange_loop(
+            &self.bits,
+            self.max_iterations_for_atomic_update(),
+            None,
+            |old_flags| Ok::<_, Infallible>(AtomicUpdate::Set(bits::is_closed::set(old_flags))),
+        )
         .expect("failed to perform atomic update");
 
         if notify_tx {
@@ -243,7 +246,7 @@ where
     fn set_tx(&self) {
         if let Err(err) = utils::compare_exchange_loop(
             &self.bits,
-            self.update_max_iterations(),
+            self.max_iterations_for_atomic_update(),
             None,
             |old_bits| {
                 if bits::tx_is_set::is_set(old_bits) {
@@ -259,7 +262,7 @@ where
     fn set_rx(&self) {
         if let Err(err) = utils::compare_exchange_loop(
             &self.bits,
-            self.update_max_iterations(),
+            self.max_iterations_for_atomic_update(),
             None,
             |old_bits| {
                 if bits::rx_is_set::is_set(old_bits) {
@@ -273,7 +276,7 @@ where
         }
     }
 
-    fn update_max_iterations(&self) -> usize {
+    fn max_iterations_for_atomic_update(&self) -> usize {
         utils::ATOMIC_UPDATE_MAX_ITERATIONS
     }
 }

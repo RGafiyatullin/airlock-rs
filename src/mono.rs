@@ -142,7 +142,7 @@ impl<T> Link<T> {
 
                 utils::compare_exchange_loop(
                     &self.flags,
-                    self.update_max_iterations(),
+                    self.max_iterations_for_atomic_update(),
                     Some(flags),
                     |old_flags| Ok::<_, Infallible>(AtomicUpdate::Set(old_flags & !FLAG_IS_FULL)),
                 )
@@ -169,7 +169,7 @@ impl<T> Link<T> {
 
                 utils::compare_exchange_loop(
                     &self.flags,
-                    self.update_max_iterations(),
+                    self.max_iterations_for_atomic_update(),
                     Some(flags),
                     |old_flags| Ok::<_, Infallible>(AtomicUpdate::Set(old_flags | FLAG_IS_FULL)),
                 )
@@ -185,7 +185,7 @@ impl<T> Link<T> {
     fn close(&self, notify_tx: bool, notify_rx: bool) {
         utils::compare_exchange_loop(
             &self.flags,
-            self.update_max_iterations(),
+            self.max_iterations_for_atomic_update(),
             None,
             |old_flags| Ok::<_, Infallible>(AtomicUpdate::Set(old_flags | FLAG_IS_CLOSED)),
         )
@@ -202,7 +202,7 @@ impl<T> Link<T> {
     fn set_tx(&self) {
         if let Err(err) = utils::compare_exchange_loop(
             &self.flags,
-            self.update_max_iterations(),
+            self.max_iterations_for_atomic_update(),
             None,
             |old_flags| {
                 if old_flags & FLAG_TX_IS_SET != 0 {
@@ -218,7 +218,7 @@ impl<T> Link<T> {
     fn set_rx(&self) {
         if let Err(err) = utils::compare_exchange_loop(
             &self.flags,
-            self.update_max_iterations(),
+            self.max_iterations_for_atomic_update(),
             None,
             |old_flags| {
                 if old_flags & FLAG_RX_IS_SET != 0 {
@@ -232,7 +232,7 @@ impl<T> Link<T> {
         }
     }
 
-    fn update_max_iterations(&self) -> usize {
+    fn max_iterations_for_atomic_update(&self) -> usize {
         utils::ATOMIC_UPDATE_MAX_ITERATIONS
     }
 }

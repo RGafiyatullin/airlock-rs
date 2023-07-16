@@ -71,7 +71,7 @@ fn t_04() {
         let link = Link::<Value, _, _, _>::new(&buffer, &tx_wakers, &rx_wakers);
 
         let mut tx_1 = Tx::new(&link);
-        let mut rx_1 = Rx::new(&link);
+        let mut _rx_1 = Rx::new(&link);
 
         tx_1.send_nowait(counter.add(1)).expect("tx-1.send-nowait");
         assert!(tx_1.send_nowait(counter.add(1)).expect_err("tx-1.send-nowait").is_full());
@@ -202,7 +202,7 @@ async fn t_08() {
                     let t0 = std::time::Instant::now();
 
                     let mut rx = Rx::new(Arc::clone(&link));
-                    for i in 0..ITERATIONS {
+                    for _i in 0..ITERATIONS {
                         rx.recv().await.expect("rx.recv");
                     }
 

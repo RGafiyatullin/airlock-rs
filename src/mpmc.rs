@@ -8,7 +8,6 @@ use core::task::{Context, Poll};
 use futures::task::AtomicWaker;
 
 use crate::error::{RecvError, RecvErrorNoWait, SendError, SendErrorNoWait};
-use crate::mpmc::bits::head_taken;
 use crate::slot::Slot;
 use crate::utils::{self, AtomicUpdate};
 
@@ -106,6 +105,11 @@ where
         let link = self.link.borrow();
         future::poll_fn(|cx| link.poll_send(cx, self.idx, &mut value)).await
     }
+
+    /// Closes the channel.
+    pub fn close(&mut self) {
+        self.link.borrow().close()
+    }
 }
 
 impl<T, L, B, TW, RW> Rx<T, L, B, TW, RW>
@@ -138,6 +142,11 @@ where
     pub async fn recv(&mut self) -> Result<T, RecvError> {
         let link = self.link.borrow();
         future::poll_fn(|cx| link.poll_recv(cx, self.idx)).await
+    }
+
+    /// Closes the channel.
+    pub fn close(&mut self) {
+        self.link.borrow().close()
     }
 }
 
@@ -201,7 +210,7 @@ where
 
             match utils::compare_exchange_loop(
                 &self.bits,
-                self.update_max_iterations(),
+                self.max_iterations_for_atomic_update(),
                 None,
                 |bits| {
                     let head_avail = bits::head_avail(bits);
@@ -231,19 +240,22 @@ where
 
         unsafe { buffer[tail_this].as_maybe_uninit_mut() }.write(value);
 
-        utils::compare_exchange_loop(&self.bits, self.update_max_iterations(), None, |old_bits| {
-            if bits::tail_avail(old_bits) == tail_this {
-                let new_bits = bits::set_tail_avail(old_bits, tail_next);
-                Ok::<_, Infallible>(AtomicUpdate::Set(new_bits))
-            } else {
-                Ok::<_, Infallible>(AtomicUpdate::Retry)
-            }
-        })
+        utils::compare_exchange_loop(
+            &self.bits,
+            self.max_iterations_for_atomic_update(),
+            None,
+            |old_bits| {
+                if bits::tail_avail(old_bits) == tail_this {
+                    let new_bits = bits::set_tail_avail(old_bits, tail_next);
+                    Ok::<_, Infallible>(AtomicUpdate::Set(new_bits))
+                } else {
+                    Ok::<_, Infallible>(AtomicUpdate::Retry)
+                }
+            },
+        )
         .expect("Failed to perform atomic update");
 
-        for (_, waker) in self.rx_wakers.as_ref() {
-            waker.wake();
-        }
+        self.notify_rxs();
 
         Ok(())
     }
@@ -257,7 +269,7 @@ where
 
             match utils::compare_exchange_loop(
                 &self.bits,
-                self.update_max_iterations(),
+                self.max_iterations_for_atomic_update(),
                 None,
                 |bits| {
                     let head_taken = bits::head_taken(bits);
@@ -285,19 +297,22 @@ where
 
         let value = unsafe { buffer[head_this].as_maybe_uninit_mut().assume_init_read() };
 
-        utils::compare_exchange_loop(&self.bits, self.update_max_iterations(), None, |old_bits| {
-            if bits::head_avail(old_bits) == head_this {
-                let new_bits = bits::set_head_avail(old_bits, head_next);
-                Ok::<_, Infallible>(AtomicUpdate::Set(new_bits))
-            } else {
-                Ok::<_, Infallible>(AtomicUpdate::Retry)
-            }
-        })
+        utils::compare_exchange_loop(
+            &self.bits,
+            self.max_iterations_for_atomic_update(),
+            None,
+            |old_bits| {
+                if bits::head_avail(old_bits) == head_this {
+                    let new_bits = bits::set_head_avail(old_bits, head_next);
+                    Ok::<_, Infallible>(AtomicUpdate::Set(new_bits))
+                } else {
+                    Ok::<_, Infallible>(AtomicUpdate::Retry)
+                }
+            },
+        )
         .expect("Failed to perform atomic update");
 
-        for (_, waker) in self.tx_wakers.as_ref() {
-            waker.wake();
-        }
+        self.notify_txs();
 
         Ok(value)
     }
@@ -343,7 +358,33 @@ where
             panic!("ref-dec overflow")
         }
     }
-    fn update_max_iterations(&self) -> usize {
+
+    fn notify_rxs(&self) {
+        Self::notify(self.rx_wakers.as_ref());
+    }
+    fn notify_txs(&self) {
+        Self::notify(self.tx_wakers.as_ref());
+    }
+    fn notify(wakers: &[(AtomicBool, AtomicWaker)]) {
+        for (_, waker) in wakers {
+            waker.wake();
+        }
+    }
+
+    fn close(&self) {
+        utils::compare_exchange_loop(
+            &self.bits,
+            self.max_iterations_for_atomic_update(),
+            None,
+            |bits| Ok::<_, Infallible>(AtomicUpdate::Set(bits::set_closed(bits))),
+        )
+        .expect("failed to perform atomic update");
+
+        self.notify_txs();
+        self.notify_rxs();
+    }
+
+    fn max_iterations_for_atomic_update(&self) -> usize {
         utils::ATOMIC_UPDATE_MAX_ITERATIONS
     }
 }
@@ -417,7 +458,7 @@ mod bits {
 
     const INDEX_BIT_COUNT: u8 = (USIZE_BITS - FLAGS_COUNT) / 4;
     const START_HEAD_TAKEN: u8 = FLAGS_COUNT;
-    const START_HEAD_AVAIL: u8 = FLAGS_COUNT + INDEX_BIT_COUNT * 1;
+    const START_HEAD_AVAIL: u8 = FLAGS_COUNT + INDEX_BIT_COUNT;
     const START_TAIL_TAKEN: u8 = FLAGS_COUNT + INDEX_BIT_COUNT * 2;
     const START_TAIL_AVAIL: u8 = FLAGS_COUNT + INDEX_BIT_COUNT * 3;
 
@@ -425,7 +466,7 @@ mod bits {
         utils::bits::flag::<Usize, POS_IS_CLOSED>(bits) != 0
     }
     pub(super) fn set_closed(bits: Usize) -> Usize {
-        utils::bits::flag::<Usize, POS_IS_CLOSED>(utils::bits::ones())
+        bits | utils::bits::flag::<Usize, POS_IS_CLOSED>(utils::bits::ones())
     }
 
     pub(super) fn head_taken(bits: Usize) -> Usize {

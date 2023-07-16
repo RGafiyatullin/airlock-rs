@@ -105,8 +105,7 @@ pub mod bits {
         0b0u8.into()
     }
     pub(crate) fn ones<F: BitOps>() -> F {
-        let zeroes: F = 0b0u8.into();
-        !zeroes
+        !zeroes::<F>()
     }
 
     pub(crate) fn flag<F: BitOps, const POS: u8>(flags: F) -> F {
