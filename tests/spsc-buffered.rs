@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use airlock::spsc::buffered::*;
 use airlock::slot::Slot;
+use airlock::spsc::buffered::*;
 
 mod utils;
 use futures::future;
