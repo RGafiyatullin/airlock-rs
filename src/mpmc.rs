@@ -91,6 +91,11 @@ where
             idx,
         }
     }
+
+    /// Sends a value if the channel is not full.
+    pub fn send_nowait(&mut self, value: T) -> Result<(), SendErrorNoWait<T>> {
+        self.link.borrow().send_nowait(value)
+    }
 }
 
 impl<T, L, B, TW, RW> Rx<T, L, B, TW, RW>
@@ -144,38 +149,56 @@ where
         let buffer = self.buffer.as_ref();
         let buffer_len = buffer.len();
 
-        let bits = self.bits.load(Ordering::SeqCst);
+        let (tail_taken, tail_taken_next) = {
+            let mut output = None;
 
-        let head_avail = bits::head_avail(bits);
-        let tail_taken = bits::tail_taken(bits); // FIXME: compare-exchange-loop to acquire this value
-        let tail_if_full = (head_avail + buffer_len - 1) % buffer_len;
-        let tail_avail_when_can_commit = (tail_taken + buffer_len - 1) % buffer_len;
+            match utils::compare_exchange_loop(
+                &self.bits,
+                self.update_max_iterations(),
+                None,
+                |bits| {
+                    let head_avail = bits::head_avail(bits);
+                    let tail_taken = bits::tail_taken(bits);
+                    let tail_taken_next = (tail_taken + 1) % buffer_len;
+                    let tail_if_full = (head_avail + buffer_len - 1) % buffer_len;
 
-        let is_full = tail_taken == tail_if_full;
-        let is_closed = bits::is_closed(bits);
+                    let is_full = tail_taken == tail_if_full;
+                    let is_closed = bits::is_closed(bits);
 
-        match (is_closed, is_full) {
-            (true, _) => Err(SendErrorNoWait::Closed(value)),
-            (false, true) => Err(SendErrorNoWait::Full(value)),
-            (false, false) => {
-                unsafe { buffer[tail_taken].as_maybe_uninit_mut() }.write(value);
-                utils::compare_exchange_loop(
-                    &self.bits,
-                    self.update_max_iterations(),
-                    None,
-                    |old_bits| {
-                        if bits::tail_avail(old_bits) == tail_avail_when_can_commit {
-                            Ok::<_, Infallible>(AtomicUpdate::Set(tail_taken))
-                        } else {
-                            Ok::<_, Infallible>(AtomicUpdate::Retry)
-                        }
-                    },
-                )
-                .expect("Failed to perform atomic update");
+                    match (is_closed, is_full) {
+                        (true, _) => Err(SendErrorNoWait::Closed(())),
+                        (false, true) => Err(SendErrorNoWait::Full(())),
+                        (false, false) => {
+                            output = Some((tail_taken, tail_taken_next));
+                            let new_bits = bits::set_tail_taken(bits, tail_taken_next);
+                            Ok(AtomicUpdate::Set(new_bits))
+                        },
+                    }
+                },
+            ) {
+                Ok(_) => output.unwrap(),
+                Err(None) => panic!("Failed to perform atomic update"),
+                Err(Some(e)) => return Err(e.map_value(value)),
+            }
+        };
 
-                Ok(())
-            },
+        unsafe { buffer[tail_taken].as_maybe_uninit_mut() }.write(value);
+
+        utils::compare_exchange_loop(&self.bits, self.update_max_iterations(), None, |old_bits| {
+            if bits::tail_avail(old_bits) == tail_taken {
+                let new_bits = bits::set_tail_avail(old_bits, tail_taken_next);
+                Ok::<_, Infallible>(AtomicUpdate::Set(new_bits))
+            } else {
+                Ok::<_, Infallible>(AtomicUpdate::Retry)
+            }
+        })
+        .expect("Failed to perform atomic update");
+
+        for (_, waker) in self.rx_wakers.as_ref() {
+            waker.wake();
         }
+
+        Ok(())
     }
 
     fn recv_nowait(&self) -> Result<(), RecvErrorNoWait> {
@@ -262,6 +285,24 @@ where
         let refs = self.refs.load(Ordering::SeqCst);
         if refs != 0 {
             panic!("Dropping Link that is still referenced?")
+        }
+
+        let bits = self.bits.load(Ordering::SeqCst);
+        let mut head = bits::head_avail(bits);
+        let tail = bits::tail_avail(bits);
+        assert_eq!(head, bits::head_taken(bits));
+        assert_eq!(tail, bits::tail_taken(bits));
+
+        let buffer = self.buffer.as_ref();
+        let buffer_len = buffer.len();
+
+        while head != tail {
+            unsafe {
+                buffer[head].as_maybe_uninit_mut().assume_init_drop();
+            }
+
+            head += 1;
+            head %= buffer_len;
         }
     }
 }
