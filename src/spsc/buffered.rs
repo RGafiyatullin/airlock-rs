@@ -161,7 +161,7 @@ where
     }
 
     fn recv_nowait(&self) -> Result<T, RecvErrorNoWait> {
-        let bits = self.bits.load(Ordering::SeqCst);
+        let bits = self.bits.load(Ordering::Relaxed);
 
         let buffer = self.buffer.as_ref();
         let buffer_len = buffer.len();
@@ -193,7 +193,7 @@ where
     }
 
     fn send_nowait(&self, value: T) -> Result<(), SendErrorNoWait<T>> {
-        let bits = self.bits.load(Ordering::SeqCst);
+        let bits = self.bits.load(Ordering::Relaxed);
 
         let buffer = self.buffer.as_ref();
         let buffer_len = buffer.len();
@@ -286,7 +286,7 @@ where
     B: AsRef<[Slot<T>]>,
 {
     fn drop(&mut self) {
-        let bits = self.bits.load(Ordering::SeqCst);
+        let bits = self.bits.load(Ordering::Relaxed);
 
         let is_closed = bits::is_closed::is_set(bits);
         let tx_is_set = bits::tx_is_set::is_set(bits);

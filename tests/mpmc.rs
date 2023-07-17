@@ -74,7 +74,7 @@ fn t_04() {
         let mut _rx_1 = Rx::new(&link);
 
         tx_1.send_nowait(counter.add(1)).expect("tx-1.send-nowait");
-        assert!(tx_1.send_nowait(counter.add(1)).expect_err("tx-1.send-nowait").is_full());
+        assert!(tx_1.send_nowait(counter.add(2)).expect_err("tx-1.send-nowait").is_full());
     }
     assert_eq!(counter.count(), 0);
 }

@@ -8,11 +8,11 @@ const FLAGS_COUNT: u8 = 1;
 type Usize = <AtomicUsize as crate::utils::AtomicValue>::Value;
 const USIZE_BITS: u8 = Usize::BITS as u8;
 
-const INDEX_BIT_COUNT: u8 = (USIZE_BITS - FLAGS_COUNT) / 4;
+const INDEX_BIT_COUNT: u8 = (USIZE_BITS - FLAGS_COUNT) / 2;
 const START_HEAD_TAKEN: u8 = FLAGS_COUNT;
 const START_HEAD_AVAIL: u8 = FLAGS_COUNT + INDEX_BIT_COUNT;
-const START_TAIL_TAKEN: u8 = FLAGS_COUNT + INDEX_BIT_COUNT * 2;
-const START_TAIL_AVAIL: u8 = FLAGS_COUNT + INDEX_BIT_COUNT * 3;
+const START_TAIL_TAKEN: u8 = FLAGS_COUNT;
+const START_TAIL_AVAIL: u8 = FLAGS_COUNT + INDEX_BIT_COUNT;
 
 pub(super) fn is_closed(bits: Usize) -> bool {
     utils::bits::flag::<Usize, POS_IS_CLOSED>(bits) != 0

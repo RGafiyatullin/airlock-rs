@@ -128,7 +128,7 @@ impl<T> Link<T> {
     }
 
     fn recv_nowait(&self) -> Result<T, RecvErrorNoWait> {
-        let flags = self.flags.load(Ordering::SeqCst);
+        let flags = self.flags.load(Ordering::Relaxed);
 
         let is_closed = flags & FLAG_IS_CLOSED != 0;
         let is_empty = flags & FLAG_IS_FULL == 0;
@@ -156,7 +156,7 @@ impl<T> Link<T> {
     }
 
     fn send_nowait(&self, value: T) -> Result<(), SendErrorNoWait<T>> {
-        let flags = self.flags.load(Ordering::SeqCst);
+        let flags = self.flags.load(Ordering::Relaxed);
 
         let is_closed = flags & FLAG_IS_CLOSED != 0;
         let is_full = flags & FLAG_IS_FULL != 0;
@@ -250,7 +250,7 @@ impl<T> Default for Link<T> {
 
 impl<T> Drop for Link<T> {
     fn drop(&mut self) {
-        let flags = self.flags.load(Ordering::SeqCst);
+        let flags = self.flags.load(Ordering::Relaxed);
         let is_closed = flags & FLAG_IS_CLOSED != 0;
         let tx_is_set = flags & FLAG_TX_IS_SET != 0;
         let rx_is_set = flags & FLAG_RX_IS_SET != 0;

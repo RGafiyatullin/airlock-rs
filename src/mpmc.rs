@@ -22,20 +22,21 @@ where
 {
     _value: PhantomData<T>,
 
+    /// for 64bit usize max capacity — 2_147_483_648-1
+    /// for 32bit usize max capacity - 32_768-1
     buffer: B,
 
     refs: AtomicUsize,
 
-    /// 1bit closed flag [0]
-    /// four indexes (15/7bit):
-    /// - head-taken     [ 1..=15 / 1..=7  ]
-    /// - head-available [16..=30 / 8..=14 ]
-    /// - tail-taken     [31..=45 / 15..=21]
-    /// - tail-available [46..=61 / 22..=29]
-    ///
-    /// for 64bit usize max capacity — 32768-1
-    /// for 32bit usize max capacity - 128-1
-    bits: AtomicUsize,
+    /// 1bit closed flag[0]
+    /// 31/15bit — head-taken
+    /// 31/15bit — tail-avail
+    rx_bits: AtomicUsize,
+
+    /// 1bit closed flag[0]
+    /// 31/15bit — tail-taken
+    /// 31/15bit — head-avail
+    tx_bits: AtomicUsize,
 
     tx_wakers: TW,
     rx_wakers: RW,
@@ -202,7 +203,9 @@ where
             _value: Default::default(),
             buffer,
             refs: Default::default(),
-            bits: Default::default(),
+            // bits: Default::default(),
+            rx_bits: Default::default(),
+            tx_bits: Default::default(),
             tx_wakers,
             rx_wakers,
         }
@@ -249,24 +252,24 @@ where
             let mut output = None;
 
             match utils::compare_exchange_loop(
-                &self.bits,
+                &self.tx_bits,
                 self.max_iterations_for_atomic_update(),
                 None,
-                |bits| {
-                    let head_avail = bits::head_avail(bits);
-                    let tail_taken = bits::tail_taken(bits);
+                |tx_bits| {
+                    let head_avail = bits::head_avail(tx_bits);
+                    let tail_taken = bits::tail_taken(tx_bits);
                     let tail_taken_next = (tail_taken + 1) % buffer_len;
                     let tail_if_full = (head_avail + buffer_len - 1) % buffer_len;
 
                     let is_full = tail_taken == tail_if_full;
-                    let is_closed = bits::is_closed(bits);
+                    let is_closed = bits::is_closed(tx_bits);
 
                     match (is_closed, is_full) {
                         (true, _) => Err(SendErrorNoWait::closed(())),
                         (false, true) => Err(SendErrorNoWait::full(())),
                         (false, false) => {
                             output = Some((tail_taken, tail_taken_next));
-                            let new_bits = bits::set_tail_taken(bits, tail_taken_next);
+                            let new_bits = bits::set_tail_taken(tx_bits, tail_taken_next);
                             Ok(AtomicUpdate::Set(new_bits))
                         },
                     }
@@ -281,12 +284,12 @@ where
         unsafe { buffer[tail_this].as_maybe_uninit_mut() }.write(value);
 
         utils::compare_exchange_loop(
-            &self.bits,
+            &self.rx_bits,
             self.max_iterations_for_atomic_update(),
             None,
-            |old_bits| {
-                if bits::tail_avail(old_bits) == tail_this {
-                    let new_bits = bits::set_tail_avail(old_bits, tail_next);
+            |rx_bits| {
+                if bits::tail_avail(rx_bits) == tail_this {
+                    let new_bits = bits::set_tail_avail(rx_bits, tail_next);
                     Ok::<_, Infallible>(AtomicUpdate::Set(new_bits))
                 } else {
                     Ok::<_, Infallible>(AtomicUpdate::Retry)
@@ -308,7 +311,7 @@ where
             let mut output = None;
 
             match utils::compare_exchange_loop(
-                &self.bits,
+                &self.rx_bits,
                 self.max_iterations_for_atomic_update(),
                 None,
                 |bits| {
@@ -338,7 +341,7 @@ where
         let value = unsafe { buffer[head_this].as_maybe_uninit_mut().assume_init_read() };
 
         utils::compare_exchange_loop(
-            &self.bits,
+            &self.tx_bits,
             self.max_iterations_for_atomic_update(),
             None,
             |old_bits| {
@@ -372,7 +375,7 @@ where
 
     fn try_attach(&self, wakers: &[(AtomicBool, AtomicWaker)]) -> Result<usize, ()> {
         for (idx, (taken, _waker)) in wakers.iter().enumerate() {
-            if !taken.swap(true, Ordering::SeqCst) {
+            if !taken.swap(true, Ordering::Relaxed) {
                 self.ref_inc();
                 return Ok(idx)
             }
@@ -382,19 +385,19 @@ where
 
     fn detach(&self, wakers: &[(AtomicBool, AtomicWaker)], idx: usize) {
         let (taken, _) = &wakers[idx];
-        if !taken.swap(false, Ordering::SeqCst) {
+        if !taken.swap(false, Ordering::Relaxed) {
             panic!("attempt to detach from unoccupied waker")
         }
         self.ref_dec();
     }
 
     fn ref_inc(&self) {
-        if self.refs.fetch_add(1, Ordering::SeqCst) == usize::MAX {
+        if self.refs.fetch_add(1, Ordering::Relaxed) == usize::MAX {
             panic!("ref-inc overflow")
         }
     }
     fn ref_dec(&self) {
-        if self.refs.fetch_sub(1, Ordering::SeqCst) == 0 {
+        if self.refs.fetch_sub(1, Ordering::Relaxed) == 0 {
             panic!("ref-dec overflow")
         }
     }
@@ -413,7 +416,14 @@ where
 
     fn close(&self) {
         utils::compare_exchange_loop(
-            &self.bits,
+            &self.tx_bits,
+            self.max_iterations_for_atomic_update(),
+            None,
+            |bits| Ok::<_, Infallible>(AtomicUpdate::Set(bits::set_closed(bits))),
+        )
+        .expect("failed to perform atomic update");
+        utils::compare_exchange_loop(
+            &self.rx_bits,
             self.max_iterations_for_atomic_update(),
             None,
             |bits| Ok::<_, Infallible>(AtomicUpdate::Set(bits::set_closed(bits))),
@@ -460,16 +470,18 @@ where
     RW: AsRef<[(AtomicBool, AtomicWaker)]>,
 {
     fn drop(&mut self) {
-        let refs = self.refs.load(Ordering::SeqCst);
+        let refs = self.refs.load(Ordering::Relaxed);
         if refs != 0 {
             panic!("Dropping Link that is still referenced?")
         }
 
-        let bits = self.bits.load(Ordering::SeqCst);
-        let mut head = bits::head_avail(bits);
-        let tail = bits::tail_avail(bits);
-        assert_eq!(head, bits::head_taken(bits));
-        assert_eq!(tail, bits::tail_taken(bits));
+        let tx_bits = self.tx_bits.load(Ordering::SeqCst);
+        let rx_bits = self.rx_bits.load(Ordering::SeqCst);
+
+        let mut head = bits::head_avail(tx_bits);
+        let tail = bits::tail_avail(rx_bits);
+        assert_eq!(head, bits::head_taken(rx_bits));
+        assert_eq!(tail, bits::tail_taken(tx_bits));
 
         let buffer = self.buffer.as_ref();
         let buffer_len = buffer.len();

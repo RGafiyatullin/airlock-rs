@@ -30,15 +30,15 @@ where
     A: AtomicValue,
     F: FnMut(A::Value) -> Result<AtomicUpdate<A::Value>, E>,
 {
-    let mut old_value = old_value.unwrap_or_else(|| atomic_value.load(Ordering::SeqCst));
+    let mut old_value = old_value.unwrap_or_else(|| atomic_value.load(Ordering::Relaxed));
     for _ in 0..max_attempts {
         let AtomicUpdate::Set(new_value) = map_value(old_value).map_err(Some)? else { continue };
 
         match atomic_value.compare_exchange(
             old_value,
             new_value,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
+            Ordering::Release,
+            Ordering::Relaxed,
         ) {
             Ok(_) => return Ok(new_value),
             Err(v) => old_value = v,
